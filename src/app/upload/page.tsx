@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import Link from "next/link";
-import { Upload, CheckCircle2, XCircle, AlertTriangle, FileSpreadsheet, Map, Loader2 } from "lucide-react";
+import { Upload, CheckCircle2, XCircle, AlertTriangle, FileSpreadsheet, Map, Loader2, Download } from "lucide-react";
 
 interface UploadResult {
   success: boolean;
@@ -60,9 +60,17 @@ export default function UploadPage() {
     <div className="flex-1 overflow-auto bg-gray-50">
       <div className="max-w-3xl mx-auto p-8">
         <h1 className="text-2xl font-bold text-gray-900 mb-2">טעינת נתוני אקסל</h1>
-        <p className="text-gray-600 mb-8">
+        <p className="text-gray-600 mb-4">
           העלה קובץ אקסל (.xlsx) עם גליונות Sites, Radars, Site_Activities, Sources ו-Contacts.
         </p>
+        <div className="mb-6">
+          <a
+            href="/api/download"
+            className="inline-flex items-center gap-2 px-4 py-2 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-lg text-sm font-medium border border-gray-200"
+          >
+            <Download className="w-4 h-4" /> הורד את קובץ הנתונים הנוכחי
+          </a>
+        </div>
 
         <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-8">
           <div className="border-2 border-dashed border-gray-300 rounded-lg p-8 text-center">

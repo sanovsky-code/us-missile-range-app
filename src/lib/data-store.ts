@@ -1,5 +1,9 @@
+import fs from "fs";
+import path from "path";
 import { Site, Radar, SiteActivity, Source, Contact, SiteListItem, FilterState, FilterOptions } from "./types";
-import { seedSites, seedRadars, seedActivities, seedSources, seedContacts } from "./seed-data";
+import { parseAndValidateExcel } from "./excel-parser";
+
+const DATA_FILE_PATH = path.join(process.cwd(), "data", "us_missile_range_data.xlsx");
 
 class DataStore {
   private static instance: DataStore;
@@ -9,6 +13,7 @@ class DataStore {
   private sources: Map<string, Source> = new Map();
   private contacts: Map<string, Contact> = new Map();
   private initialized = false;
+  private dataFilePath: string = DATA_FILE_PATH;
 
   static getInstance(): DataStore {
     if (!DataStore.instance) {
@@ -21,12 +26,58 @@ class DataStore {
   }
 
   private initialize(): void {
-    seedSites.forEach((s) => this.sites.set(s.site_id, s));
-    seedRadars.forEach((r) => this.radars.set(r.radar_id, r));
-    seedActivities.forEach((a) => this.activities.set(a.activity_id, a));
-    seedSources.forEach((s) => this.sources.set(s.source_id, s));
-    seedContacts.forEach((c) => this.contacts.set(c.contact_id, c));
+    try {
+      if (fs.existsSync(this.dataFilePath)) {
+        const buffer = fs.readFileSync(this.dataFilePath);
+        // synchronous-style init: we need async, so just mark as initialized
+        // and schedule the load. The first request may see empty data briefly.
+        this.loadFromBufferSync(buffer);
+      } else {
+        console.warn(`Data file not found at ${this.dataFilePath} - app will start with empty data. Upload an Excel file via /upload.`);
+      }
+    } catch (error) {
+      console.error("Failed to initialize data store from Excel:", error);
+    }
     this.initialized = true;
+  }
+
+  private loadFromBufferSync(buffer: Buffer): void {
+    // exceljs load is async, so we kick it off and the data will appear shortly
+    parseAndValidateExcel(buffer)
+      .then((result) => {
+        if (result.errors.length > 0) {
+          console.warn(`Data file has ${result.errors.length} validation errors but loading anyway:`);
+          result.errors.slice(0, 5).forEach((e) =>
+            console.warn(`  [${e.sheet} row ${e.row}] ${e.field}: ${e.message}`)
+          );
+        }
+        this.loadFromImport(
+          result.sites,
+          result.radars,
+          result.activities,
+          result.sources,
+          result.contacts
+        );
+        console.log(
+          `Loaded data: ${result.sites.length} sites, ${result.radars.length} radars, ` +
+          `${result.activities.length} activities, ${result.sources.length} sources, ${result.contacts.length} contacts`
+        );
+      })
+      .catch((err) => console.error("Failed to parse data file:", err));
+  }
+
+  async ensureLoaded(): Promise<void> {
+    if (this.sites.size === 0 && fs.existsSync(this.dataFilePath)) {
+      const buffer = fs.readFileSync(this.dataFilePath);
+      const result = await parseAndValidateExcel(buffer);
+      this.loadFromImport(
+        result.sites,
+        result.radars,
+        result.activities,
+        result.sources,
+        result.contacts
+      );
+    }
   }
 
   loadFromImport(
@@ -46,6 +97,23 @@ class DataStore {
     activities.forEach((a) => this.activities.set(a.activity_id, a));
     sources.forEach((s) => this.sources.set(s.source_id, s));
     contacts.forEach((c) => this.contacts.set(c.contact_id, c));
+  }
+
+  saveToFile(): void {
+    // Persist current state to disk so subsequent restarts pick up the new data.
+    // This is called after a successful upload.
+    // We re-export the current in-memory data to the Excel file.
+    // Implementation is delegated to a helper to keep the data store thin.
+    import("./excel-writer").then(({ writeDataToExcel }) =>
+      writeDataToExcel(
+        this.dataFilePath,
+        Array.from(this.sites.values()),
+        Array.from(this.radars.values()),
+        Array.from(this.activities.values()),
+        Array.from(this.sources.values()),
+        Array.from(this.contacts.values())
+      )
+    ).catch((err) => console.error("Failed to save data to Excel:", err));
   }
 
   getAllSites(filters?: FilterState): SiteListItem[] {

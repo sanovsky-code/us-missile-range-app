@@ -7,6 +7,7 @@ export async function GET(
 ) {
   const { siteId } = await params;
   const store = getDataStore();
+  await store.ensureLoaded();
   const site = store.getSiteById(siteId);
 
   if (!site) {

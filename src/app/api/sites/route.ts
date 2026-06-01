@@ -4,6 +4,7 @@ import { FilterState } from "@/lib/types";
 
 export async function GET(request: NextRequest) {
   const store = getDataStore();
+  await store.ensureLoaded();
   const params = request.nextUrl.searchParams;
 
   const filters: FilterState = {

@@ -8,12 +8,12 @@ export async function POST(request: NextRequest) {
     const file = formData.get("file") as File | null;
 
     if (!file) {
-      return NextResponse.json({ error: "No file provided" }, { status: 400 });
+      return NextResponse.json({ error: "לא סופק קובץ" }, { status: 400 });
     }
 
     if (!file.name.endsWith(".xlsx")) {
       return NextResponse.json(
-        { error: "Only .xlsx files are supported" },
+        { error: "רק קבצי .xlsx נתמכים" },
         { status: 400 }
       );
     }
@@ -31,6 +31,8 @@ export async function POST(request: NextRequest) {
         result.sources,
         result.contacts
       );
+      // Persist to disk so subsequent restarts pick it up
+      store.saveToFile();
     }
 
     return NextResponse.json({
@@ -47,7 +49,7 @@ export async function POST(request: NextRequest) {
     });
   } catch (error) {
     return NextResponse.json(
-      { error: "Failed to process Excel file: " + (error instanceof Error ? error.message : "Unknown error") },
+      { error: "עיבוד קובץ האקסל נכשל: " + (error instanceof Error ? error.message : "שגיאה לא ידועה") },
       { status: 500 }
     );
   }
