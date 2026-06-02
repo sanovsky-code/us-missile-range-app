@@ -165,7 +165,15 @@ class DataStore {
       }
     }
 
-    return sites.map((s) => this.toListItem(s));
+    let items = sites.map((s) => this.toListItem(s));
+
+    if (filters?.specializations && filters.specializations.length > 0) {
+      items = items.filter((item) =>
+        filters.specializations.some((spec) => item.specializations.includes(spec))
+      );
+    }
+
+    return items;
   }
 
   private toListItem(site: Site): SiteListItem {
@@ -190,7 +198,52 @@ class DataStore {
       record_status: site.record_status,
       activity_count: activities.length,
       radar_count: radars.length,
+      specializations: this.computeSpecializations(site, radars, activities),
     };
+  }
+
+  private computeSpecializations(site: Site, radars: Radar[], activities: SiteActivity[]): string[] {
+    const out: string[] = [];
+
+    const activityCats = new Set(activities.map((a) => a.activity_category));
+    const haystacks: string[] = [
+      site.description || "",
+      site.missile_relevance || "",
+      site.radar_relevance || "",
+      site.launch_relevance || "",
+      ...radars.map((r) => `${r.purpose || ""} ${r.public_description || ""}`),
+      ...activities.map((a) => a.activity_description || ""),
+    ].map((s) => s.toLowerCase());
+    const text = haystacks.join("  ");
+
+    // Ballistic Missile Tracking & Control
+    const bmKeywords = [
+      "ballistic missile", "icbm", "slbm", "bmd", "missile defense", "missile defence",
+      "early warning", "midcourse", "terminal phase", "interceptor", "thaad", "patriot",
+      "aegis bmd", "ground-based midcourse", "gbm", "missile tracking",
+      "ballistic", "warhead", "reentry vehicle", "rentry",
+    ];
+    const hasBmActivity = activityCats.has("Missile Defense") || activityCats.has("Radar Tracking");
+    const hasBmKeyword = bmKeywords.some((k) => text.includes(k));
+    if (hasBmActivity || hasBmKeyword) {
+      out.push("Ballistic Missile Tracking");
+    }
+
+    // Satellite Launch Tracking
+    const satKeywords = [
+      "satellite", "orbital", "space surveillance", "telemetry", "space domain",
+      "geodss", "launch vehicle tracking", "space-track", "spacetrack",
+      "space object", "earth orbit", "leo", "geo", "polar orbit",
+      "launch range", "downrange tracking",
+    ];
+    const hasSatActivity = activityCats.has("Space Launch") || activityCats.has("Telemetry")
+      || activityCats.has("Radar Tracking");
+    const hasSatKeyword = satKeywords.some((k) => text.includes(k));
+    if (hasSatActivity || hasSatKeyword) {
+      out.push("Satellite Launch Tracking");
+    }
+
+    return out;
   }
 
   getSiteById(siteId: string): Site | null {
@@ -253,6 +306,7 @@ class DataStore {
       sizeCategories: [...new Set(sites.map((s) => s.size_category))],
       activityTypes: [...new Set(activities.map((a) => a.activity_category))].sort(),
       confidenceLevels: ["High", "Medium", "Low"],
+      specializations: ["Ballistic Missile Tracking", "Satellite Launch Tracking"],
     };
   }
 }

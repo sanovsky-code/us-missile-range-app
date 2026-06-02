@@ -15,6 +15,7 @@ export async function GET(request: NextRequest) {
     sizeCategories: params.getAll("sizeCategory"),
     activityTypes: params.getAll("activityType"),
     confidenceLevels: params.getAll("confidenceLevel"),
+    specializations: params.getAll("specialization"),
   };
 
   const sites = store.getAllSites(filters);

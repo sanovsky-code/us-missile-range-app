@@ -26,7 +26,8 @@ export default function FilterSidebar({
     filters.siteTypes.length > 0 ||
     filters.sizeCategories.length > 0 ||
     filters.activityTypes.length > 0 ||
-    filters.confidenceLevels.length > 0;
+    filters.confidenceLevels.length > 0 ||
+    (filters.specializations?.length ?? 0) > 0;
 
   const clearAll = () => {
     onFiltersChange({
@@ -37,7 +38,13 @@ export default function FilterSidebar({
       sizeCategories: [],
       activityTypes: [],
       confidenceLevels: [],
+      specializations: [],
     });
+  };
+
+  const specializationHebrew: Record<string, string> = {
+    "Ballistic Missile Tracking": "בקרת ומעקב טילים בליסטיים",
+    "Satellite Launch Tracking": "מעקב שיגורי לוויינים",
   };
 
   return (
@@ -79,6 +86,13 @@ export default function FilterSidebar({
       </div>
 
       <div className="flex-1 overflow-auto p-4 space-y-4">
+        <FilterSelect
+          label="התמחות"
+          options={filterOptions.specializations || []}
+          selected={filters.specializations || []}
+          onChange={(specializations) => onFiltersChange({ ...filters, specializations })}
+          labelFor={(v) => specializationHebrew[v] || v}
+        />
         <FilterSelect
           label="מדינה (Country)"
           options={filterOptions.countries || []}

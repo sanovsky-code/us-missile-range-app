@@ -47,6 +47,7 @@ export interface SiteListItem {
   record_status: string;
   activity_count: number;
   radar_count: number;
+  specializations: string[];
 }
 
 export interface Radar {
@@ -138,6 +139,7 @@ export interface FilterState {
   sizeCategories: string[];
   activityTypes: string[];
   confidenceLevels: string[];
+  specializations: string[];
 }
 
 export interface FilterOptions {
@@ -147,4 +149,5 @@ export interface FilterOptions {
   sizeCategories: string[];
   activityTypes: string[];
   confidenceLevels: string[];
+  specializations: string[];
 }

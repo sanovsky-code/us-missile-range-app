@@ -23,6 +23,7 @@ const emptyFilters: FilterState = {
   sizeCategories: [],
   activityTypes: [],
   confidenceLevels: [],
+  specializations: [],
 };
 
 const emptyOptions: FilterOptions = {
@@ -32,6 +33,7 @@ const emptyOptions: FilterOptions = {
   sizeCategories: [],
   activityTypes: [],
   confidenceLevels: [],
+  specializations: [],
 };
 
 export default function MapPage() {
@@ -53,7 +55,7 @@ export default function MapPage() {
 
   const filteredSites = useMemo(() => {
     let sites = allSites;
-    const { search, countries, states, siteTypes, sizeCategories, confidenceLevels } = filters;
+    const { search, countries, states, siteTypes, sizeCategories, confidenceLevels, specializations } = filters;
 
     if (search) {
       const q = search.toLowerCase();
@@ -71,6 +73,11 @@ export default function MapPage() {
     if (siteTypes.length > 0) sites = sites.filter((s) => siteTypes.includes(s.site_type));
     if (sizeCategories.length > 0) sites = sites.filter((s) => sizeCategories.includes(s.size_category));
     if (confidenceLevels.length > 0) sites = sites.filter((s) => confidenceLevels.includes(s.confidence_level));
+    if (specializations && specializations.length > 0) {
+      sites = sites.filter((s) =>
+        specializations.some((spec) => (s.specializations || []).includes(spec))
+      );
+    }
 
     return sites;
   }, [allSites, filters]);

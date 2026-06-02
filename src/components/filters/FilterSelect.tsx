@@ -7,9 +7,10 @@ interface FilterSelectProps {
   options: string[];
   selected: string[];
   onChange: (selected: string[]) => void;
+  labelFor?: (value: string) => string;
 }
 
-export default function FilterSelect({ label, options, selected, onChange }: FilterSelectProps) {
+export default function FilterSelect({ label, options, selected, onChange, labelFor }: FilterSelectProps) {
   const toggleOption = (option: string) => {
     if (selected.includes(option)) {
       onChange(selected.filter((s) => s !== option));
@@ -42,7 +43,7 @@ export default function FilterSelect({ label, options, selected, onChange }: Fil
                 onChange={() => toggleOption(option)}
                 className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
               />
-              <span className="text-gray-700 truncate">{option}</span>
+              <span className="text-gray-700 truncate">{labelFor ? labelFor(option) : option}</span>
             </label>
           ))}
         </div>
