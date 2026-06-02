@@ -41,7 +41,7 @@ export default function SitePopupCard({ site }: { site: SiteListItem }) {
         )}
       </p>
 
-      <div className="flex items-center gap-4 text-xs text-gray-500 mb-3">
+      <div className="flex items-center gap-4 text-xs text-gray-500 mb-2">
         <span className="flex items-center gap-1">
           <Radio className="w-3 h-3" /> {site.radar_count} מכ&quot;מים
         </span>
@@ -49,6 +49,12 @@ export default function SitePopupCard({ site }: { site: SiteListItem }) {
           <Activity className="w-3 h-3" /> {site.activity_count} פעילויות
         </span>
       </div>
+
+      {site.coordinate_type?.toLowerCase().includes("approximate") && (
+        <div className="mb-2 text-[10px] text-amber-700 bg-amber-50 border border-amber-200 rounded px-2 py-1">
+          ⚠ מיקום משוער – מוצג על מרכז המדינה (אין קואורדינטות מדויקות במקור).
+        </div>
+      )}
 
       <Link
         href={`/site/${site.site_id}`}

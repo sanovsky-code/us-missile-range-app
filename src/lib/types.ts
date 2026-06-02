@@ -41,6 +41,7 @@ export interface SiteListItem {
   state: string;
   latitude: number;
   longitude: number;
+  coordinate_type: string;
   operator?: string;
   managing_organization: string;
   confidence_level: string;

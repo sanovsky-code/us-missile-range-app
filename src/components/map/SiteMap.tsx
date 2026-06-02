@@ -10,8 +10,18 @@ import SitePopupCard from "./SitePopupCard";
 import MapLegend from "./MapLegend";
 import "leaflet/dist/leaflet.css";
 
-function createSiteIcon(sizeCategory: string): L.DivIcon {
+function createSiteIcon(sizeCategory: string, approximate: boolean): L.DivIcon {
   const color = SIZE_CATEGORY_COLORS[sizeCategory] || "#6b7280";
+  if (approximate) {
+    // Approximate location: hollow ring with dashed border, semi-transparent fill
+    return L.divIcon({
+      className: "",
+      html: `<div style="background:${color}33;width:22px;height:22px;border-radius:50%;border:2.5px dashed ${color};box-shadow:0 2px 6px rgba(0,0,0,0.25);box-sizing:border-box;"></div>`,
+      iconSize: [22, 22],
+      iconAnchor: [11, 11],
+      popupAnchor: [0, -14],
+    });
+  }
   return L.divIcon({
     className: "",
     html: `<div style="background:${color};width:22px;height:22px;border-radius:50%;border:2.5px solid white;box-shadow:0 2px 6px rgba(0,0,0,0.35);"></div>`,
@@ -69,17 +79,20 @@ export default function SiteMap({ sites }: SiteMapProps) {
           spiderfyOnMaxZoom
           showCoverageOnHover={false}
         >
-          {sites.map((site) => (
+          {sites.map((site) => {
+            const approximate = site.coordinate_type?.toLowerCase().includes("approximate") ?? false;
+            return (
             <Marker
               key={site.site_id}
               position={[site.latitude, site.longitude]}
-              icon={createSiteIcon(site.size_category)}
+              icon={createSiteIcon(site.size_category, approximate)}
             >
               <Popup maxWidth={350} minWidth={280}>
                 <SitePopupCard site={site} />
               </Popup>
             </Marker>
-          ))}
+            );
+          })}
         </MarkerClusterGroup>
       </MapContainer>
       <MapLegend />

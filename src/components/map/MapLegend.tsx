@@ -22,6 +22,15 @@ export default function MapLegend() {
           </div>
         ))}
       </div>
+      <div className="mt-3 pt-2 border-t border-gray-100">
+        <div className="flex items-center gap-2">
+          <span
+            className="w-3 h-3 rounded-full"
+            style={{ background: "#6b728033", border: "1.5px dashed #6b7280", boxSizing: "border-box" }}
+          />
+          <span className="text-[11px] text-gray-500">מיקום משוער (מרכז המדינה)</span>
+        </div>
+      </div>
     </div>
   );
 }

@@ -192,6 +192,7 @@ class DataStore {
       state: site.state,
       latitude: site.latitude,
       longitude: site.longitude,
+      coordinate_type: site.coordinate_type || "Site centroid",
       operator: site.operator,
       managing_organization: site.managing_organization,
       confidence_level: site.confidence_level,
