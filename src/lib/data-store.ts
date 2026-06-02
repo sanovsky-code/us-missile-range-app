@@ -128,6 +128,7 @@ class DataStore {
         sites = sites.filter((s) => {
           const matchesSite =
             s.site_name.toLowerCase().includes(q) ||
+            (s.country?.toLowerCase().includes(q) ?? false) ||
             s.state.toLowerCase().includes(q) ||
             s.managing_organization.toLowerCase().includes(q) ||
             (s.operator?.toLowerCase().includes(q) ?? false);
@@ -138,6 +139,9 @@ class DataStore {
         });
       }
 
+      if (filters.countries && filters.countries.length > 0) {
+        sites = sites.filter((s) => filters.countries.includes(s.country));
+      }
       if (filters.states.length > 0) {
         sites = sites.filter((s) => filters.states.includes(s.state));
       }
@@ -176,6 +180,7 @@ class DataStore {
       site_name: site.site_name,
       site_type: site.site_type,
       size_category: site.size_category,
+      country: site.country,
       state: site.state,
       latitude: site.latitude,
       longitude: site.longitude,
@@ -224,7 +229,8 @@ class DataStore {
     const activities = Array.from(this.activities.values());
 
     return {
-      states: [...new Set(sites.map((s) => s.state))].sort(),
+      countries: [...new Set(sites.map((s) => s.country).filter(Boolean))].sort(),
+      states: [...new Set(sites.map((s) => s.state).filter(Boolean))].sort(),
       siteTypes: [...new Set(sites.map((s) => s.site_type))].sort(),
       sizeCategories: [...new Set(sites.map((s) => s.size_category))],
       activityTypes: [...new Set(activities.map((a) => a.activity_category))].sort(),

@@ -87,8 +87,8 @@ export const CONTACT_TYPES = [
   "Other",
 ] as const;
 
-export const MAP_CENTER: [number, number] = [39.8283, -98.5795];
-export const MAP_ZOOM = 5;
+export const MAP_CENTER: [number, number] = [20, 10];
+export const MAP_ZOOM = 2;
 export const TILE_URL = "https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png";
 export const TILE_ATTRIBUTION = "&copy; OpenStreetMap contributors";
 

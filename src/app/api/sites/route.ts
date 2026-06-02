@@ -9,6 +9,7 @@ export async function GET(request: NextRequest) {
 
   const filters: FilterState = {
     search: params.get("search") || "",
+    countries: params.getAll("country"),
     states: params.getAll("state"),
     siteTypes: params.getAll("siteType"),
     sizeCategories: params.getAll("sizeCategory"),

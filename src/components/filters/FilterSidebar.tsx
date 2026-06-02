@@ -21,6 +21,7 @@ export default function FilterSidebar({
 }: FilterSidebarProps) {
   const hasActiveFilters =
     filters.search ||
+    (filters.countries?.length ?? 0) > 0 ||
     filters.states.length > 0 ||
     filters.siteTypes.length > 0 ||
     filters.sizeCategories.length > 0 ||
@@ -30,6 +31,7 @@ export default function FilterSidebar({
   const clearAll = () => {
     onFiltersChange({
       search: "",
+      countries: [],
       states: [],
       siteTypes: [],
       sizeCategories: [],
@@ -78,7 +80,13 @@ export default function FilterSidebar({
 
       <div className="flex-1 overflow-auto p-4 space-y-4">
         <FilterSelect
-          label="מדינה"
+          label="מדינה (Country)"
+          options={filterOptions.countries || []}
+          selected={filters.countries || []}
+          onChange={(countries) => onFiltersChange({ ...filters, countries })}
+        />
+        <FilterSelect
+          label="מדינה / חבל ארץ"
           options={filterOptions.states}
           selected={filters.states}
           onChange={(states) => onFiltersChange({ ...filters, states })}

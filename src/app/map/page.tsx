@@ -17,6 +17,7 @@ const SiteMap = dynamic(() => import("@/components/map/SiteMap"), {
 
 const emptyFilters: FilterState = {
   search: "",
+  countries: [],
   states: [],
   siteTypes: [],
   sizeCategories: [],
@@ -25,6 +26,7 @@ const emptyFilters: FilterState = {
 };
 
 const emptyOptions: FilterOptions = {
+  countries: [],
   states: [],
   siteTypes: [],
   sizeCategories: [],
@@ -51,26 +53,24 @@ export default function MapPage() {
 
   const filteredSites = useMemo(() => {
     let sites = allSites;
-    const { search, states, siteTypes, sizeCategories, activityTypes, confidenceLevels } = filters;
+    const { search, countries, states, siteTypes, sizeCategories, confidenceLevels } = filters;
 
     if (search) {
       const q = search.toLowerCase();
       sites = sites.filter(
         (s) =>
           s.site_name.toLowerCase().includes(q) ||
+          (s.country?.toLowerCase().includes(q) ?? false) ||
           s.state.toLowerCase().includes(q) ||
           s.managing_organization.toLowerCase().includes(q) ||
           (s.operator?.toLowerCase().includes(q) ?? false)
       );
     }
+    if (countries.length > 0) sites = sites.filter((s) => countries.includes(s.country));
     if (states.length > 0) sites = sites.filter((s) => states.includes(s.state));
     if (siteTypes.length > 0) sites = sites.filter((s) => siteTypes.includes(s.site_type));
     if (sizeCategories.length > 0) sites = sites.filter((s) => sizeCategories.includes(s.size_category));
     if (confidenceLevels.length > 0) sites = sites.filter((s) => confidenceLevels.includes(s.confidence_level));
-    if (activityTypes.length > 0) {
-      // For activity type filtering, we need server-side help — skip for client filter
-      // This will be handled by refetching from API if needed
-    }
 
     return sites;
   }, [allSites, filters]);

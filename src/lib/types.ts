@@ -36,6 +36,7 @@ export interface SiteListItem {
   site_name: string;
   site_type: string;
   size_category: string;
+  country: string;
   state: string;
   latitude: number;
   longitude: number;
@@ -129,6 +130,7 @@ export interface ImportResult {
 
 export interface FilterState {
   search: string;
+  countries: string[];
   states: string[];
   siteTypes: string[];
   sizeCategories: string[];
@@ -137,6 +139,7 @@ export interface FilterState {
 }
 
 export interface FilterOptions {
+  countries: string[];
   states: string[];
   siteTypes: string[];
   sizeCategories: string[];
