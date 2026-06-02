@@ -1,23 +1,28 @@
 "use client";
 
-import { Search, X, SlidersHorizontal } from "lucide-react";
-import { FilterState, FilterOptions } from "@/lib/types";
+import { SlidersHorizontal } from "lucide-react";
+import { FilterState, FilterOptions, SiteListItem } from "@/lib/types";
 import FilterSelect from "./FilterSelect";
+import SearchAutocomplete from "./SearchAutocomplete";
 
 interface FilterSidebarProps {
   filters: FilterState;
   filterOptions: FilterOptions;
+  allSites: SiteListItem[];
   totalCount: number;
   filteredCount: number;
   onFiltersChange: (filters: FilterState) => void;
+  onSelectSite?: (site: SiteListItem) => void;
 }
 
 export default function FilterSidebar({
   filters,
   filterOptions,
+  allSites,
   totalCount,
   filteredCount,
   onFiltersChange,
+  onSelectSite,
 }: FilterSidebarProps) {
   const hasActiveFilters =
     filters.search ||
@@ -65,24 +70,12 @@ export default function FilterSidebar({
           )}
         </div>
 
-        <div className="relative">
-          <Search className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
-          <input
-            type="text"
-            placeholder="חיפוש אתרים, מכ&quot;מים, מפעילים..."
-            value={filters.search}
-            onChange={(e) => onFiltersChange({ ...filters, search: e.target.value })}
-            className="w-full pr-9 pl-8 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-          />
-          {filters.search && (
-            <button
-              onClick={() => onFiltersChange({ ...filters, search: "" })}
-              className="absolute left-2 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600"
-            >
-              <X className="w-4 h-4" />
-            </button>
-          )}
-        </div>
+        <SearchAutocomplete
+          value={filters.search}
+          onChange={(s) => onFiltersChange({ ...filters, search: s })}
+          sites={allSites}
+          onSelectSite={onSelectSite}
+        />
       </div>
 
       <div className="flex-1 overflow-auto p-4 space-y-4">

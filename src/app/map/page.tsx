@@ -41,6 +41,7 @@ export default function MapPage() {
   const [filterOptions, setFilterOptions] = useState<FilterOptions>(emptyOptions);
   const [filters, setFilters] = useState<FilterState>(emptyFilters);
   const [loading, setLoading] = useState(true);
+  const [focusSiteId, setFocusSiteId] = useState<string | null>(null);
 
   useEffect(() => {
     fetch("/api/sites")
@@ -90,17 +91,31 @@ export default function MapPage() {
     );
   }
 
+  const handleSelectSite = (site: SiteListItem) => {
+    // If the chosen site is filtered out by current filters, clear filters so
+    // it actually appears on the map.
+    if (!filteredSites.some((s) => s.site_id === site.site_id)) {
+      setFilters(emptyFilters);
+    }
+    // Trigger map to focus on the selected site
+    setFocusSiteId(site.site_id);
+    // Reset after a tick so subsequent same-site clicks still trigger
+    setTimeout(() => setFocusSiteId(null), 100);
+  };
+
   return (
     <div className="flex-1 flex overflow-hidden">
       <FilterSidebar
         filters={filters}
         filterOptions={filterOptions}
+        allSites={allSites}
         totalCount={allSites.length}
         filteredCount={filteredSites.length}
         onFiltersChange={setFilters}
+        onSelectSite={handleSelectSite}
       />
       <div className="flex-1">
-        <SiteMap sites={filteredSites} />
+        <SiteMap sites={filteredSites} focusSiteId={focusSiteId} />
       </div>
     </div>
   );
