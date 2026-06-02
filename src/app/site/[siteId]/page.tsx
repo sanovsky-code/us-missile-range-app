@@ -83,7 +83,7 @@ export default function SiteProfilePage() {
 
         <ActivitiesSection activities={site.activities || []} />
 
-        <RadarTable radars={site.radars || []} />
+        <RadarTable radars={site.radars || []} sources={site.sources || []} />
 
         <ContactsSection contacts={site.contacts || []} />
 

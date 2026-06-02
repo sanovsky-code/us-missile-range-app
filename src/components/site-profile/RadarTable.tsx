@@ -1,9 +1,10 @@
 "use client";
 
 import { useState } from "react";
-import { Radar } from "@/lib/types";
+import { Radar, Source } from "@/lib/types";
 import { ConfidenceBadge, StatusBadge } from "@/components/ui/Badge";
 import { Radio, ChevronDown, ChevronUp } from "lucide-react";
+import CitedText from "@/components/ui/CitedText";
 
 function isEnglish(text: string): boolean {
   const latinChars = text.match(/[a-zA-Z]/g)?.length || 0;
@@ -18,7 +19,7 @@ function LtrText({ children, className = "" }: { children: React.ReactNode; clas
   return <span className={className}>{children}</span>;
 }
 
-function RadarRow({ radar }: { radar: Radar }) {
+function RadarRow({ radar, sources }: { radar: Radar; sources: Source[] }) {
   const [expanded, setExpanded] = useState(false);
 
   return (
@@ -69,8 +70,8 @@ function RadarRow({ radar }: { radar: Radar }) {
 
                   {radar.public_description && (
                     <tr className="border-b border-gray-100">
-                      <td colSpan={2} className="px-4 py-3 text-gray-700 leading-relaxed text-sm">
-                        <LtrText>{radar.public_description}</LtrText>
+                      <td colSpan={2} className="px-4 py-3 text-gray-700 leading-relaxed text-sm" dir="ltr">
+                        <CitedText text={radar.public_description} sources={sources} isEnglish />
                       </td>
                     </tr>
                   )}
@@ -118,7 +119,7 @@ function InfoRow({ label, value }: { label: string; value?: string }) {
   );
 }
 
-export default function RadarTable({ radars }: { radars: Radar[] }) {
+export default function RadarTable({ radars, sources = [] }: { radars: Radar[]; sources?: Source[] }) {
   if (!radars || radars.length === 0) {
     return (
       <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
@@ -149,7 +150,7 @@ export default function RadarTable({ radars }: { radars: Radar[] }) {
           </thead>
           <tbody>
             {radars.map((radar) => (
-              <RadarRow key={radar.radar_id} radar={radar} />
+              <RadarRow key={radar.radar_id} radar={radar} sources={sources} />
             ))}
           </tbody>
         </table>

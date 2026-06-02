@@ -207,9 +207,27 @@ class DataStore {
 
   private getSourcesForSite(siteId: string): Source[] {
     const sourceIds = new Set<string>();
+    const site = this.sites.get(siteId);
+
+    // Inline citations from the site description
+    if (site?.citations) {
+      site.citations.split(/[,\s]+/).forEach((id) => {
+        if (id.startsWith("SRC-")) sourceIds.add(id);
+      });
+    }
+
+    // Inline citations from radar descriptions and per-radar source_id
     Array.from(this.radars.values())
       .filter((r) => r.site_id === siteId)
-      .forEach((r) => sourceIds.add(r.source_id));
+      .forEach((r) => {
+        if (r.source_id) sourceIds.add(r.source_id);
+        if (r.citations) {
+          r.citations.split(/[,\s]+/).forEach((id) => {
+            if (id.startsWith("SRC-")) sourceIds.add(id);
+          });
+        }
+      });
+
     Array.from(this.activities.values())
       .filter((a) => a.site_id === siteId)
       .forEach((a) => sourceIds.add(a.source_id));

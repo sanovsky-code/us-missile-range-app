@@ -1,11 +1,14 @@
 import { Site } from "@/lib/types";
 import { Building2, Globe, Mail, Phone, Crosshair } from "lucide-react";
+import CitedText from "@/components/ui/CitedText";
 
 export default function SiteOverview({ site }: { site: Site }) {
   return (
     <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
       <h2 className="text-lg font-semibold text-gray-900 mb-4">סקירה כללית</h2>
-      <p className="text-gray-700 leading-relaxed mb-6" dir="ltr">{site.description}</p>
+      <div className="text-gray-700 leading-relaxed mb-6" dir="ltr" style={{ whiteSpace: "pre-wrap" }}>
+        <CitedText text={site.description} sources={site.sources || []} />
+      </div>
 
       <div className="grid grid-cols-2 gap-4">
         <div className="flex items-start gap-3">

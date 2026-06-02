@@ -18,6 +18,7 @@ export interface Site {
   public_contact_phone?: string;
   website?: string;
   description: string;
+  citations?: string;
   confidence_level: string;
   last_verified_date: string;
   record_status: string;
@@ -64,6 +65,7 @@ export interface Radar {
   fix_date?: string;
   operational_status: string;
   public_description: string;
+  citations?: string;
   confidence_level: string;
   last_verified_date: string;
   source_id: string;

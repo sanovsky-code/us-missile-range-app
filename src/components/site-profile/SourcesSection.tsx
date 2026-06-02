@@ -44,7 +44,8 @@ export default function SourcesSection({ sources }: { sources: Source[] }) {
         {sources.map((source) => (
           <div
             key={source.source_id}
-            className="flex items-start justify-between gap-4 border border-gray-100 rounded-lg p-3"
+            id={`source-${source.source_id}`}
+            className="flex items-start justify-between gap-4 border border-gray-100 rounded-lg p-3 scroll-mt-20"
           >
             <div className="min-w-0 flex-1">
               <div className="flex items-center gap-2 mb-1">
