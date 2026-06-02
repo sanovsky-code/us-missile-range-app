@@ -4,9 +4,15 @@ import { validateSites, validateRadars, validateActivities, validateSources, val
 
 function sanitize(value: unknown): string {
   if (value == null) return "";
+  // Numbers are safe by definition - no formula injection possible
+  if (typeof value === "number") return String(value);
+  if (typeof value === "boolean") return String(value);
   let str = String(value).trim();
-  // Prevent formula injection (SEC-008)
-  if (/^[=+\-@]/.test(str)) {
+  // Apply formula injection prevention only to non-numeric string values (SEC-008)
+  if (/^[=+@]/.test(str)) {
+    str = "'" + str;
+  } else if (/^-/.test(str) && isNaN(Number(str))) {
+    // Only treat leading-minus as suspicious if the string is NOT a number
     str = "'" + str;
   }
   return str;
