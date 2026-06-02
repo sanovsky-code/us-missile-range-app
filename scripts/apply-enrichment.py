@@ -19,8 +19,14 @@ from openpyxl.styles import Font, PatternFill, Alignment
 
 BASE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 EXCEL = os.path.join(BASE, "data", "us_missile_range_data.xlsx")
-DESC_DIR = os.path.join(BASE, "data", "notebook-responses", "site-descriptions")
-RADAR_DIR = os.path.join(BASE, "data", "notebook-responses", "radar-descriptions")
+DESC_DIRS = [
+    os.path.join(BASE, "data", "notebook-responses", "site-descriptions"),
+    os.path.join(BASE, "data", "notebook-responses", "site-descriptions-v2"),
+]
+RADAR_DIRS = [
+    os.path.join(BASE, "data", "notebook-responses", "radar-descriptions"),
+    os.path.join(BASE, "data", "notebook-responses", "radar-descriptions-v2"),
+]
 
 
 def load_uuid_to_src(wb):
@@ -147,7 +153,9 @@ def update_site_descriptions(wb, uuid_to_src):
             name_to_row[name.lower().strip()] = row
 
     updated = 0
-    files = sorted(glob.glob(os.path.join(DESC_DIR, "*.json")))
+    files = []
+    for d in DESC_DIRS:
+        files.extend(sorted(glob.glob(os.path.join(d, "*.json"))))
     print(f"  Processing {len(files)} site description batches...")
     for fname in files:
         try:
@@ -189,17 +197,33 @@ def update_radar_descriptions(wb, uuid_to_src):
     s_id_col = s_headers.index("site_id") + 1
     s_name_col = s_headers.index("site_name") + 1
     id_to_sname = {}
+    sname_to_id = {}
     for row in range(2, sites_sheet.max_row + 1):
         sid = sites_sheet.cell(row=row, column=s_id_col).value
         name = sites_sheet.cell(row=row, column=s_name_col).value
         if sid:
-            id_to_sname[sid] = (name or "").lower().strip()
+            norm = (name or "").lower().strip()
+            id_to_sname[sid] = norm
+            sname_to_id[norm] = sid
 
     r_headers = [c.value for c in radars_sheet[1]]
+    r_id_col = r_headers.index("radar_id") + 1
     r_name_col = r_headers.index("radar_name") + 1
     r_site_col = r_headers.index("site_id") + 1
     r_desc_col = r_headers.index("public_description") + 1
     r_cite_col = ensure_column(radars_sheet, "citations", width=60)
+
+    # Find highest existing RAD-NNNN
+    max_rad = 0
+    for row in range(2, radars_sheet.max_row + 1):
+        rid = radars_sheet.cell(row=row, column=r_id_col).value
+        if rid and rid.startswith("RAD-"):
+            try:
+                n = int(rid[4:])
+                if n > max_rad:
+                    max_rad = n
+            except ValueError:
+                pass
 
     # (name_lower, site_name_lower) -> row
     radar_index = {}
@@ -210,7 +234,10 @@ def update_radar_descriptions(wb, uuid_to_src):
         radar_index[(rname.lower().strip(), site_name)] = row
 
     updated = 0
-    files = sorted(glob.glob(os.path.join(RADAR_DIR, "*.json")))
+    inserted = 0
+    files = []
+    for d in RADAR_DIRS:
+        files.extend(sorted(glob.glob(os.path.join(d, "*.json"))))
     print(f"  Processing {len(files)} radar description batches...")
     for fname in files:
         try:
@@ -237,7 +264,42 @@ def update_radar_descriptions(wb, uuid_to_src):
                 radars_sheet.cell(row=row, column=r_desc_col, value=new_text)
                 radars_sheet.cell(row=row, column=r_cite_col, value=", ".join(src_ids))
                 updated += 1
-    print(f"  Updated {updated} radar descriptions")
+            else:
+                # Need to insert a new radar row, but only if we can map site_name -> site_id
+                sid = sname_to_id.get(site_name)
+                if not sid:
+                    # Try fuzzy site match
+                    for sn, s_id in sname_to_id.items():
+                        if site_name and (site_name in sn or sn in site_name) and min(len(sn), len(site_name)) >= 5:
+                            sid = s_id
+                            break
+                if not sid:
+                    continue
+                max_rad += 1
+                new_row = [None] * radars_sheet.max_column
+                new_row[r_id_col - 1] = f"RAD-{max_rad:04d}"
+                new_row[r_site_col - 1] = sid
+                new_row[r_name_col - 1] = radar_name.title() if radar_name else ""
+                new_row[r_desc_col - 1] = new_text
+                # operational_status default to Unknown
+                if "operational_status" in r_headers:
+                    new_row[r_headers.index("operational_status")] = "Unknown"
+                if "radar_type" in r_headers:
+                    new_row[r_headers.index("radar_type")] = "Unknown"
+                if "purpose" in r_headers:
+                    new_row[r_headers.index("purpose")] = "See description"
+                if "confidence_level" in r_headers:
+                    new_row[r_headers.index("confidence_level")] = "Medium"
+                if "record_status" in r_headers:
+                    new_row[r_headers.index("record_status")] = "Published"
+                if "source_id" in r_headers and src_ids:
+                    new_row[r_headers.index("source_id")] = src_ids[0]
+                new_row[r_cite_col - 1] = ", ".join(src_ids)
+                radars_sheet.append(new_row)
+                # Index the newly added radar
+                radar_index[(radar_name.lower().strip(), site_name)] = radars_sheet.max_row
+                inserted += 1
+    print(f"  Updated {updated} radar descriptions, inserted {inserted} new radars")
 
 
 def main():
