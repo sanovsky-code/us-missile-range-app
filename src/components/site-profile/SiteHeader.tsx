@@ -7,7 +7,7 @@ export default function SiteHeader({ site }: { site: Site }) {
     <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
       <div className="flex items-start justify-between gap-4 mb-4">
         <div>
-          <h1 className="text-2xl font-bold text-gray-900" dir="ltr">{site.site_name}</h1>
+          <h1 className="text-2xl font-bold text-gray-900 text-left" dir="ltr">{site.site_name}</h1>
           <div className="flex items-center gap-3 mt-2 text-sm text-gray-600">
             <span className="flex items-center gap-1">
               <MapPin className="w-4 h-4" /> <span dir="ltr">{site.state}</span>

@@ -62,7 +62,7 @@ export default function ActivitiesSection({ activities }: { activities: SiteActi
               <StatusBadge status={statusHebrew[act.status] || act.status} />
               <ConfidenceBadge level={act.confidence_level} />
             </div>
-            <p className="text-sm text-gray-700 leading-relaxed" dir="ltr">{act.activity_description}</p>
+            <p className="text-sm text-gray-700 leading-relaxed text-left" dir="ltr">{act.activity_description}</p>
             <div className="flex items-center gap-4 mt-2 text-xs text-gray-500">
               {act.missile_or_system_type && (
                 <span>מערכות: <span dir="ltr">{act.missile_or_system_type}</span></span>

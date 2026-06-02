@@ -58,9 +58,9 @@ export default function SourcesSection({ sources }: { sources: Source[] }) {
                   </span>
                 )}
               </div>
-              <p className="text-sm font-medium text-gray-900">{source.source_title}</p>
+              <p className="text-sm font-medium text-gray-900 text-left" dir="ltr">{source.source_title}</p>
               {source.publisher && (
-                <p className="text-xs text-gray-500">{source.publisher}</p>
+                <p className="text-xs text-gray-500 text-left" dir="ltr">{source.publisher}</p>
               )}
               <p className="text-xs text-gray-400 mt-1">
                 גישה: {source.access_date}

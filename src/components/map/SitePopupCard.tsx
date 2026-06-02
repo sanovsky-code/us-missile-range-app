@@ -16,7 +16,7 @@ export default function SitePopupCard({ site }: { site: SiteListItem }) {
   return (
     <div className="min-w-[280px] max-w-[320px]" dir="rtl">
       <div className="flex items-start justify-between gap-2 mb-2">
-        <h3 className="font-bold text-sm leading-tight" dir="ltr">
+        <h3 className="font-bold text-sm leading-tight text-left" dir="ltr">
           {site.site_name}
         </h3>
         <span
@@ -34,7 +34,7 @@ export default function SitePopupCard({ site }: { site: SiteListItem }) {
         <span dir="ltr">{site.site_type}</span>
       </div>
 
-      <p className="text-xs text-gray-600 mb-2" dir="ltr">
+      <p className="text-xs text-gray-600 mb-2 text-left" dir="ltr">
         {site.managing_organization}
         {site.operator && site.operator !== site.managing_organization && (
           <span className="text-gray-400"> / {site.operator}</span>

@@ -14,7 +14,15 @@ function isEnglish(text: string): boolean {
 function LtrText({ children, className = "" }: { children: React.ReactNode; className?: string }) {
   const text = typeof children === "string" ? children : "";
   if (text && isEnglish(text)) {
-    return <span dir="ltr" className={`inline-block text-left ${className}`}>{children}</span>;
+    return (
+      <span
+        dir="ltr"
+        className={`inline-block text-left ${className}`}
+        style={{ textAlign: "left" }}
+      >
+        {children}
+      </span>
+    );
   }
   return <span className={className}>{children}</span>;
 }
@@ -28,7 +36,7 @@ function RadarRow({ radar, sources }: { radar: Radar; sources: Source[] }) {
         className="border-b border-gray-200 hover:bg-blue-50/40 cursor-pointer transition-colors"
         onClick={() => setExpanded(!expanded)}
       >
-        <td className="py-3 px-4">
+        <td className="py-3 px-4 text-left" dir="ltr">
           <div className="flex items-center gap-2">
             {expanded
               ? <ChevronUp className="w-4 h-4 text-gray-400 flex-shrink-0" />
@@ -39,13 +47,13 @@ function RadarRow({ radar, sources }: { radar: Radar; sources: Source[] }) {
             </span>
           </div>
         </td>
-        <td className="py-3 px-4 text-gray-600">
+        <td className="py-3 px-4 text-gray-600 text-left" dir="ltr">
           <LtrText>{radar.radar_model || "—"}</LtrText>
         </td>
-        <td className="py-3 px-4 text-gray-600">
+        <td className="py-3 px-4 text-gray-600 text-left" dir="ltr">
           <LtrText>{radar.radar_type}</LtrText>
         </td>
-        <td className="py-3 px-4 text-gray-600">
+        <td className="py-3 px-4 text-gray-600 text-left" dir="ltr">
           <LtrText className={expanded ? "" : "line-clamp-1"}>{radar.purpose}</LtrText>
         </td>
         <td className="py-3 px-4">
@@ -109,10 +117,12 @@ function RadarRow({ radar, sources }: { radar: Radar; sources: Source[] }) {
 
 function InfoRow({ label, value }: { label: string; value?: string }) {
   if (!value) return null;
+  const english = isEnglish(value);
+  const cellStyle = english ? { textAlign: "left" as const } : undefined;
   return (
     <tr className="border-b border-gray-100">
       <td className="px-4 py-2 bg-gray-50 font-semibold text-gray-600 text-xs w-36 align-top">{label}</td>
-      <td className="px-4 py-2 text-gray-800 text-sm">
+      <td className="px-4 py-2 text-gray-800 text-sm" dir={english ? "ltr" : undefined} style={cellStyle}>
         <LtrText>{value}</LtrText>
       </td>
     </tr>
