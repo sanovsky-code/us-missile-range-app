@@ -294,6 +294,41 @@ class DataStore {
       .filter((s): s is Source => s !== undefined);
   }
 
+  getSourceById(sourceId: string): Source | null {
+    return this.sources.get(sourceId) ?? null;
+  }
+
+  /**
+   * Return sites that cite a given source - either directly via `citations`
+   * or indirectly via a radar / activity / contact attached to the site.
+   */
+  getSitesCitingSource(sourceId: string): Site[] {
+    const matchingSiteIds = new Set<string>();
+    for (const site of this.sites.values()) {
+      if (site.citations && site.citations.includes(sourceId)) {
+        matchingSiteIds.add(site.site_id);
+      }
+    }
+    for (const radar of this.radars.values()) {
+      if (radar.source_id === sourceId || (radar.citations && radar.citations.includes(sourceId))) {
+        matchingSiteIds.add(radar.site_id);
+      }
+    }
+    for (const act of this.activities.values()) {
+      if (act.source_id === sourceId) {
+        matchingSiteIds.add(act.site_id);
+      }
+    }
+    for (const con of this.contacts.values()) {
+      if (con.source_id === sourceId) {
+        matchingSiteIds.add(con.site_id);
+      }
+    }
+    return Array.from(matchingSiteIds)
+      .map((id) => this.sites.get(id))
+      .filter((s): s is Site => s !== undefined);
+  }
+
   getFilterOptions(): FilterOptions {
     const sites = Array.from(this.sites.values()).filter(
       (s) => s.record_status !== "Archived"

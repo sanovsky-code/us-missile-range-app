@@ -97,6 +97,7 @@ export interface Source {
   access_date: string;
   reliability_score?: number;
   notes?: string;
+  notebook_uuid?: string;
 }
 
 export interface Contact {

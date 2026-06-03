@@ -129,6 +129,7 @@ function parseSource(r: Record<string, string>): Source {
     access_date: r.access_date || "",
     reliability_score: numOrNull(r.reliability_score),
     notes: r.notes || undefined,
+    notebook_uuid: r.notebook_uuid || undefined,
   };
 }
 

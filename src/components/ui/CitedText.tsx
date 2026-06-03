@@ -47,19 +47,14 @@ export default function CitedText({ text, sources, className = "", isEnglish, as
     uniqueIds.forEach((id, i) => {
       const src = sourceMap.get(id);
       const title = src?.source_title || id;
-      const url = src?.source_url;
       links.push(
         <sup key={`${citeIdx}-${i}`} className="mx-0.5">
           <a
-            href={`#source-${id}`}
+            href={`/source/${id}`}
+            target="_blank"
+            rel="noopener noreferrer"
             title={title}
             className="text-blue-600 hover:text-blue-800 hover:underline px-0.5 no-underline"
-            onClick={(e) => {
-              if (url) {
-                e.preventDefault();
-                window.open(url, "_blank", "noopener,noreferrer");
-              }
-            }}
           >
             [{id.replace("SRC-", "")}]
           </a>

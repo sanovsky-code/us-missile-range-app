@@ -34,6 +34,7 @@ export async function writeDataToExcel(
     { header: "public_contact_phone", key: "public_contact_phone", width: 20 },
     { header: "website", key: "website", width: 50 },
     { header: "description", key: "description", width: 80 },
+    { header: "citations", key: "citations", width: 60 },
     { header: "confidence_level", key: "confidence_level", width: 15 },
     { header: "last_verified_date", key: "last_verified_date", width: 16 },
     { header: "record_status", key: "record_status", width: 14 },
@@ -58,6 +59,7 @@ export async function writeDataToExcel(
     { header: "fix_date", key: "fix_date", width: 16 },
     { header: "operational_status", key: "operational_status", width: 16 },
     { header: "public_description", key: "public_description", width: 80 },
+    { header: "citations", key: "citations", width: 60 },
     { header: "confidence_level", key: "confidence_level", width: 15 },
     { header: "last_verified_date", key: "last_verified_date", width: 16 },
     { header: "source_id", key: "source_id", width: 12 },
@@ -93,6 +95,7 @@ export async function writeDataToExcel(
     { header: "access_date", key: "access_date", width: 16 },
     { header: "reliability_score", key: "reliability_score", width: 15 },
     { header: "notes", key: "notes", width: 40 },
+    { header: "notebook_uuid", key: "notebook_uuid", width: 38 },
   ];
   sources.forEach((s) => sourcesSheet.addRow(s));
   styleHeader(sourcesSheet);
