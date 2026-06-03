@@ -1,19 +1,22 @@
 import { NextResponse } from "next/server";
-import fs from "fs";
-import path from "path";
+import { getDataStore } from "@/lib/data-store";
+import { buildWorkbook } from "@/lib/excel-writer";
 
+/**
+ * Streams a fresh .xlsx export built from the current SQLite contents.
+ * Customers can use it as a human-readable backup of the database.
+ */
 export async function GET() {
-  const filePath = path.join(process.cwd(), "data", "us_missile_range_data.xlsx");
+  const store = getDataStore();
+  await store.ensureLoaded();
+  const { sites, radars, activities, sources, contacts } = store.getAll();
 
-  if (!fs.existsSync(filePath)) {
-    return NextResponse.json({ error: "Data file not found" }, { status: 404 });
-  }
-
-  const buffer = fs.readFileSync(filePath);
+  const buffer = await buildWorkbook(sites, radars, activities, sources, contacts);
+  const today = new Date().toISOString().slice(0, 10);
   return new NextResponse(new Uint8Array(buffer), {
     headers: {
       "Content-Type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-      "Content-Disposition": 'attachment; filename="us_missile_range_data.xlsx"',
+      "Content-Disposition": `attachment; filename="us_missile_range_export_${today}.xlsx"`,
     },
   });
 }

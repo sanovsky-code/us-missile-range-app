@@ -1,14 +1,42 @@
 import ExcelJS from "exceljs";
 import { Site, Radar, SiteActivity, Source, Contact } from "./types";
 
+/**
+ * Build an .xlsx workbook in memory and return its binary contents.
+ * Used by the /api/download route to stream a fresh export.
+ */
+export async function buildWorkbook(
+  sites: Site[],
+  radars: Radar[],
+  activities: SiteActivity[],
+  sources: Source[],
+  contacts: Contact[],
+): Promise<Buffer> {
+  const workbook = buildWorkbookInstance(sites, radars, activities, sources, contacts);
+  const arrayBuffer = await workbook.xlsx.writeBuffer();
+  return Buffer.from(arrayBuffer);
+}
+
+/** Write the same workbook to a file path. Kept for ad-hoc scripts. */
 export async function writeDataToExcel(
   filePath: string,
   sites: Site[],
   radars: Radar[],
   activities: SiteActivity[],
   sources: Source[],
-  contacts: Contact[]
+  contacts: Contact[],
 ): Promise<void> {
+  const workbook = buildWorkbookInstance(sites, radars, activities, sources, contacts);
+  await workbook.xlsx.writeFile(filePath);
+}
+
+function buildWorkbookInstance(
+  sites: Site[],
+  radars: Radar[],
+  activities: SiteActivity[],
+  sources: Source[],
+  contacts: Contact[],
+): ExcelJS.Workbook {
   const workbook = new ExcelJS.Workbook();
   workbook.creator = "US Missile Range App";
   workbook.created = new Date();
@@ -115,7 +143,7 @@ export async function writeDataToExcel(
   contacts.forEach((c) => contactsSheet.addRow(c));
   styleHeader(contactsSheet);
 
-  await workbook.xlsx.writeFile(filePath);
+  return workbook;
 }
 
 function styleHeader(sheet: ExcelJS.Worksheet) {

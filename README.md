@@ -1,36 +1,102 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# U.S. Defense Range Map (Local App)
 
-## Getting Started
+A local web application that displays U.S. and global missile, launch, test range, radar, and aerospace defense sites on an interactive map.
 
-First, run the development server:
+The app runs **locally on your computer** at `http://127.0.0.1:3000`. All data lives inside this folder — there is no server you need to access, no internet account, and nothing to install on a database server.
 
-```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+## Quick start (Windows)
+
+1. Make sure **Node.js 20 or newer** is installed (https://nodejs.org).
+2. Double-click `start.bat`.
+3. The first run installs dependencies, builds the database from the bundled Excel file, and opens your browser at `http://127.0.0.1:3000`. Subsequent runs are faster.
+
+If your browser does not open automatically, navigate to `http://127.0.0.1:3000` manually.
+
+To stop the app, close the terminal window.
+
+## How the app stores data
+
+```
+data/
+  app.db                          ← SQLite database (the live data)
+  us_missile_range_data.xlsx      ← Original Excel source (kept as an archive / import file)
+
+files/
+  documents/                      ← Uploaded PDFs / documents
+  images/                         ← Site photos
+  exports/                        ← Generated reports
+
+backups/
+  app.db.<timestamp>              ← Automatic snapshots before each Excel re-import
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+- **SQLite** (`data/app.db`) is the only thing the running app reads from and writes to.
+- The original **Excel file** is preserved untouched.
+- **Files you upload** (e.g. document attachments) live under `/files/<type>/...`. Only their metadata + a relative path is stored in SQLite — so the project folder remains portable.
+- **Backups** are written automatically before any destructive operation (like re-importing the Excel file).
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+You do **not** need to open `app.db` directly. It is read by the application behind the scenes.
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+## Re-importing the Excel file
 
-## Learn More
+If you receive an updated `us_missile_range_data.xlsx`:
 
-To learn more about Next.js, take a look at the following resources:
+1. Stop the app (close the terminal window).
+2. Replace `data/us_missile_range_data.xlsx` with the new version.
+3. Run:
+   ```
+   npm run db:import
+   ```
+4. Start the app again with `start.bat`.
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+The import script automatically backs up the current `data/app.db` into `/backups/` before replacing its contents.
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+You can also re-import from the **/upload** page inside the running app: select an `.xlsx` file, click "העלה ואמת" (Upload & Validate), and the database is updated on the fly. A backup is still taken.
 
-## Deploy on Vercel
+## Useful npm scripts
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+| Command | What it does |
+|---|---|
+| `npm run dev` | Run the app in development mode |
+| `npm run build` | Compile a production build |
+| `npm start` | Run the production build (used by `start.bat`) |
+| `npm run db:import` | Re-import `data/us_missile_range_data.xlsx` into `data/app.db` (creates a backup first) |
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+## Project layout
+
+```
+us-missile-range-app/
+├── data/                        Database + import source
+├── files/                       File attachments (project-root-relative)
+├── backups/                     Automatic .db snapshots
+├── scripts/                     Maintenance scripts (Excel import, etc.)
+├── src/
+│   ├── app/                     Next.js pages + API routes
+│   ├── components/              React components
+│   └── lib/
+│       ├── db.ts                SQLite connection + schema
+│       ├── data-store.ts        Read/write API used by the app
+│       ├── file-store.ts        Helper for file attachments
+│       ├── excel-parser.ts      Reads .xlsx uploads
+│       └── excel-writer.ts      Builds .xlsx exports on demand
+├── start.bat                    Windows launcher
+└── README.md
+```
+
+## Troubleshooting
+
+**The app says "SQLite database not found".**
+Run `npm run db:import` to build `data/app.db` from the Excel file.
+
+**A backup operation failed / the database is locked.**
+Make sure the app is fully stopped (no Node.js process running). On Windows the easiest way is to close all terminal windows that were running the app, then try again.
+
+**I want a clean start.**
+Delete `data/app.db` (the running app must be stopped first) and re-run `npm run db:import`.
+
+**My Excel file has errors on upload.**
+Open the upload page (`/upload`) and read the validation report. Common issues: missing `site_id`, invalid coordinates, picklist values outside the allowed set. Fix the Excel and re-upload.
+
+## Sending the project to someone else
+
+The whole folder is self-contained. You can zip the entire `us-missile-range-app/` directory and send it to a customer. They only need Node.js installed; everything else lives inside the folder. Paths in the database are all relative, so the project works as soon as it is unzipped.

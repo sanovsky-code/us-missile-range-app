@@ -40,3 +40,21 @@ yarn-error.log*
 *.tsbuildinfo
 next-env.d.ts
 __pycache__/
+
+# SQLite database (regenerated from data/us_missile_range_data.xlsx)
+/data/app.db
+/data/app.db-journal
+/data/app.db-shm
+/data/app.db-wal
+
+# Automatic backups
+/backups/*
+!/backups/.gitkeep
+
+# User-uploaded files (we ship empty bucket dirs)
+/files/documents/*
+/files/images/*
+/files/exports/*
+!/files/documents/.gitkeep
+!/files/images/.gitkeep
+!/files/exports/.gitkeep
