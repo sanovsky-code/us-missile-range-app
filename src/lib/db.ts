@@ -140,6 +140,41 @@ CREATE TABLE IF NOT EXISTS files (
 );
 CREATE INDEX IF NOT EXISTS idx_files_entity ON files(entity_type, entity_id);
 
+-- User comments on sites. History is preserved by always inserting a new row
+-- (existing rows are never overwritten or deleted by the UI).
+-- site_id is TEXT to match sites.site_id (e.g. "SITE-0170").
+CREATE TABLE IF NOT EXISTS site_comments (
+  id            INTEGER PRIMARY KEY AUTOINCREMENT,
+  site_id       TEXT NOT NULL,
+  comment_text  TEXT NOT NULL,
+  created_by    TEXT,
+  created_at    TEXT DEFAULT CURRENT_TIMESTAMP,
+  updated_at    TEXT,
+  FOREIGN KEY (site_id) REFERENCES sites(site_id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_site_comments_site_id ON site_comments(site_id);
+
+-- Tasks linked to a site. Status and priority are constrained at the
+-- application layer (TS enums) but kept as TEXT in SQLite for forward
+-- compatibility.
+CREATE TABLE IF NOT EXISTS site_tasks (
+  id            INTEGER PRIMARY KEY AUTOINCREMENT,
+  site_id       TEXT NOT NULL,
+  title         TEXT NOT NULL,
+  description   TEXT,
+  status        TEXT NOT NULL DEFAULT 'Open',
+  priority      TEXT NOT NULL DEFAULT 'Medium',
+  due_date      TEXT,
+  created_by    TEXT,
+  created_at    TEXT DEFAULT CURRENT_TIMESTAMP,
+  updated_at    TEXT,
+  FOREIGN KEY (site_id) REFERENCES sites(site_id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_site_tasks_site_id ON site_tasks(site_id);
+CREATE INDEX IF NOT EXISTS idx_site_tasks_status ON site_tasks(status);
+CREATE INDEX IF NOT EXISTS idx_site_tasks_due_date ON site_tasks(due_date);
+CREATE INDEX IF NOT EXISTS idx_site_tasks_priority ON site_tasks(priority);
+
 -- Tiny key/value table for migrations / app metadata
 CREATE TABLE IF NOT EXISTS app_meta (
   key   TEXT PRIMARY KEY,

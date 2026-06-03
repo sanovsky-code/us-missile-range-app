@@ -11,6 +11,8 @@ import RadarTable from "@/components/site-profile/RadarTable";
 import ActivitiesSection from "@/components/site-profile/ActivitiesSection";
 import ContactsSection from "@/components/site-profile/ContactsSection";
 import SourcesSection from "@/components/site-profile/SourcesSection";
+import CommentsSection from "@/components/site-profile/CommentsSection";
+import TasksSection from "@/components/site-profile/TasksSection";
 import { ArrowRight, Loader2, Calendar, ShieldCheck } from "lucide-react";
 
 const SiteMiniMap = dynamic(() => import("@/components/site-profile/SiteMiniMap"), {
@@ -80,6 +82,10 @@ export default function SiteProfilePage() {
         />
 
         <SiteOverview site={site} />
+
+        <TasksSection siteId={site.site_id} />
+
+        <CommentsSection siteId={site.site_id} />
 
         <ActivitiesSection activities={site.activities || []} />
 

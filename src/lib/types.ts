@@ -133,6 +133,39 @@ export interface ImportResult {
   warnings: ValidationError[];
 }
 
+export interface SiteComment {
+  id: number;
+  site_id: string;
+  comment_text: string;
+  created_by?: string;
+  created_at: string;
+  updated_at?: string;
+}
+
+export const TASK_STATUSES = ["Open", "In Progress", "Done", "Cancelled"] as const;
+export type TaskStatus = (typeof TASK_STATUSES)[number];
+
+export const TASK_PRIORITIES = ["Low", "Medium", "High"] as const;
+export type TaskPriority = (typeof TASK_PRIORITIES)[number];
+
+export interface SiteTask {
+  id: number;
+  site_id: string;
+  title: string;
+  description?: string;
+  status: TaskStatus;
+  priority: TaskPriority;
+  due_date?: string;
+  created_by?: string;
+  created_at: string;
+  updated_at?: string;
+}
+
+export interface SiteTaskWithSite extends SiteTask {
+  site_name: string;
+  country: string;
+}
+
 export interface FilterState {
   search: string;
   countries: string[];

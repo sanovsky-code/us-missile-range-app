@@ -37,6 +37,15 @@ backups/
 
 You do **not** need to open `app.db` directly. It is read by the application behind the scenes.
 
+## Working with sites
+
+Open the **Map** tab, click any marker, then "View Full Profile" (or use the search box in the filter sidebar). On every site profile you can:
+
+- **Tasks** — Create a task linked to the site (title, description, priority, due date). Update its status (Open → In Progress → Done / Cancelled) directly from the list. Tasks are stored in SQLite and survive restarts.
+- **Comments** — Add free-text comments. Every comment is appended to the site's history (newest first) and is **never overwritten**, so the full history is always visible.
+
+The **Management** tab in the top navigation shows every task across every site in one table — filterable by status and priority — with a direct link to the related site. Use it as a daily worklist.
+
 ## Re-importing the Excel file
 
 If you receive an updated `us_missile_range_data.xlsx`:
@@ -51,7 +60,17 @@ If you receive an updated `us_missile_range_data.xlsx`:
 
 The import script automatically backs up the current `data/app.db` into `/backups/` before replacing its contents.
 
-You can also re-import from the **/upload** page inside the running app: select an `.xlsx` file, click "העלה ואמת" (Upload & Validate), and the database is updated on the fly. A backup is still taken.
+## SQLite tables
+
+The database contains:
+
+| Table | Purpose |
+|---|---|
+| `sites`, `radars`, `activities`, `sources`, `contacts` | Static reference data imported from Excel |
+| `site_comments` | User-added comments per site (history preserved, never overwritten) |
+| `site_tasks` | User-created tasks per site (status, priority, due date) |
+| `files` | Metadata for file attachments (actual files live under `/files/`) |
+| `app_meta` | Migration markers (last import time, etc.) |
 
 ## Useful npm scripts
 

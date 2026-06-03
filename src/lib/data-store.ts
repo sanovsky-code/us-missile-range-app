@@ -20,6 +20,13 @@ import {
   SiteListItem,
   FilterState,
   FilterOptions,
+  SiteComment,
+  SiteTask,
+  SiteTaskWithSite,
+  TaskStatus,
+  TaskPriority,
+  TASK_STATUSES,
+  TASK_PRIORITIES,
 } from "./types";
 import { getDb, getDbPath, transaction } from "./db";
 
@@ -585,6 +592,135 @@ class DataStore {
     };
   }
 
+
+  // --- Comments -----------------------------------------------------------
+
+  listCommentsForSite(siteId: string): SiteComment[] {
+    return getDb()
+      .prepare("SELECT * FROM site_comments WHERE site_id = ? ORDER BY datetime(created_at) DESC, id DESC")
+      .all(siteId) as SiteComment[];
+  }
+
+  addComment(siteId: string, text: string, createdBy?: string): SiteComment {
+    if (!text || !text.trim()) {
+      throw new Error("Comment text is required");
+    }
+    // Verify the site exists, otherwise SQLite raises a foreign key error.
+    const exists = getDb().prepare("SELECT 1 FROM sites WHERE site_id = ?").get(siteId);
+    if (!exists) throw new Error(`Site "${siteId}" not found`);
+
+    const result = getDb()
+      .prepare("INSERT INTO site_comments (site_id, comment_text, created_by) VALUES (?, ?, ?)")
+      .run(siteId, text.trim(), createdBy ?? null);
+    const id = Number(result.lastInsertRowid);
+    return getDb().prepare("SELECT * FROM site_comments WHERE id = ?").get(id) as SiteComment;
+  }
+
+  // --- Tasks --------------------------------------------------------------
+
+  listTasksForSite(siteId: string): SiteTask[] {
+    return getDb()
+      .prepare(`SELECT * FROM site_tasks WHERE site_id = ?
+                ORDER BY (status IN ('Done','Cancelled')) ASC,
+                         datetime(due_date) IS NULL,
+                         datetime(due_date) ASC,
+                         id DESC`)
+      .all(siteId) as SiteTask[];
+  }
+
+  listAllTasks(filters?: { status?: TaskStatus[]; priority?: TaskPriority[] }): SiteTaskWithSite[] {
+    const where: string[] = [];
+    const params: unknown[] = [];
+    if (filters?.status && filters.status.length > 0) {
+      where.push(`t.status IN (${filters.status.map(() => "?").join(",")})`);
+      params.push(...filters.status);
+    }
+    if (filters?.priority && filters.priority.length > 0) {
+      where.push(`t.priority IN (${filters.priority.map(() => "?").join(",")})`);
+      params.push(...filters.priority);
+    }
+    const sql = `
+      SELECT t.*, s.site_name AS site_name, s.country AS country
+      FROM site_tasks t
+      JOIN sites s ON s.site_id = t.site_id
+      ${where.length ? "WHERE " + where.join(" AND ") : ""}
+      ORDER BY
+        (t.status IN ('Done','Cancelled')) ASC,
+        datetime(t.due_date) IS NULL,
+        datetime(t.due_date) ASC,
+        t.id DESC
+    `;
+    return getDb().prepare(sql).all(...params) as SiteTaskWithSite[];
+  }
+
+  createTask(task: {
+    site_id: string;
+    title: string;
+    description?: string;
+    status?: TaskStatus;
+    priority?: TaskPriority;
+    due_date?: string;
+    created_by?: string;
+  }): SiteTask {
+    if (!task.title || !task.title.trim()) throw new Error("Title is required");
+    const exists = getDb().prepare("SELECT 1 FROM sites WHERE site_id = ?").get(task.site_id);
+    if (!exists) throw new Error(`Site "${task.site_id}" not found`);
+
+    const status = task.status && TASK_STATUSES.includes(task.status) ? task.status : "Open";
+    const priority = task.priority && TASK_PRIORITIES.includes(task.priority) ? task.priority : "Medium";
+
+    const result = getDb()
+      .prepare(`INSERT INTO site_tasks (site_id, title, description, status, priority, due_date, created_by)
+                VALUES (?, ?, ?, ?, ?, ?, ?)`)
+      .run(
+        task.site_id,
+        task.title.trim(),
+        task.description?.trim() || null,
+        status,
+        priority,
+        task.due_date || null,
+        task.created_by || null,
+      );
+    const id = Number(result.lastInsertRowid);
+    return getDb().prepare("SELECT * FROM site_tasks WHERE id = ?").get(id) as SiteTask;
+  }
+
+  updateTask(id: number, patch: Partial<{
+    title: string;
+    description: string;
+    status: TaskStatus;
+    priority: TaskPriority;
+    due_date: string | null;
+  }>): SiteTask | null {
+    const existing = getDb().prepare("SELECT * FROM site_tasks WHERE id = ?").get(id) as SiteTask | undefined;
+    if (!existing) return null;
+
+    if (patch.status && !TASK_STATUSES.includes(patch.status)) {
+      throw new Error(`Invalid status: ${patch.status}`);
+    }
+    if (patch.priority && !TASK_PRIORITIES.includes(patch.priority)) {
+      throw new Error(`Invalid priority: ${patch.priority}`);
+    }
+
+    const updates: string[] = [];
+    const params: unknown[] = [];
+    if (patch.title !== undefined) { updates.push("title = ?"); params.push(patch.title.trim()); }
+    if (patch.description !== undefined) { updates.push("description = ?"); params.push(patch.description?.trim() || null); }
+    if (patch.status !== undefined) { updates.push("status = ?"); params.push(patch.status); }
+    if (patch.priority !== undefined) { updates.push("priority = ?"); params.push(patch.priority); }
+    if (patch.due_date !== undefined) { updates.push("due_date = ?"); params.push(patch.due_date || null); }
+    if (updates.length === 0) return existing;
+
+    updates.push("updated_at = CURRENT_TIMESTAMP");
+    params.push(id);
+    getDb().prepare(`UPDATE site_tasks SET ${updates.join(", ")} WHERE id = ?`).run(...params);
+    return getDb().prepare("SELECT * FROM site_tasks WHERE id = ?").get(id) as SiteTask;
+  }
+
+  deleteTask(id: number): boolean {
+    const result = getDb().prepare("DELETE FROM site_tasks WHERE id = ?").run(id);
+    return result.changes > 0;
+  }
 
   /** Copy data/app.db to backups/app.db.<timestamp> before destructive operations. */
   backup(): string | null {
