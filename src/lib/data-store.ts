@@ -28,6 +28,7 @@ import {
   TaskPriority,
   TASK_STATUSES,
   TASK_PRIORITIES,
+  SiteContact,
 } from "./types";
 import { getDb, getDbPath, transaction } from "./db";
 
@@ -787,6 +788,97 @@ class DataStore {
         a.id DESC
     `;
     return getDb().prepare(sql).all(...params) as SiteTimelineActivityWithSite[];
+  }
+
+  // --- Site contacts ------------------------------------------------------
+  //
+  // User-managed contacts attached to a site. Independent of the
+  // Excel-imported Contact records (which live in the `contacts` table and
+  // remain read-only).
+
+  listSiteContacts(siteId: string): SiteContact[] {
+    return getDb()
+      .prepare(`SELECT * FROM site_contacts WHERE site_id = ?
+                ORDER BY datetime(created_at) DESC, id DESC`)
+      .all(siteId) as SiteContact[];
+  }
+
+  getSiteContact(id: number): SiteContact | null {
+    const row = getDb().prepare("SELECT * FROM site_contacts WHERE id = ?").get(id);
+    return (row as SiteContact | undefined) ?? null;
+  }
+
+  createSiteContact(input: {
+    site_id: string;
+    full_name: string;
+    role_title?: string;
+    organization?: string;
+    phone?: string;
+    email?: string;
+    notes?: string;
+  }): SiteContact {
+    if (!input.full_name || !input.full_name.trim()) {
+      throw new Error("full_name is required");
+    }
+    const siteExists = getDb().prepare("SELECT 1 FROM sites WHERE site_id = ?").get(input.site_id);
+    if (!siteExists) throw new Error(`Site "${input.site_id}" not found`);
+
+    const result = getDb().prepare(`
+      INSERT INTO site_contacts
+        (site_id, full_name, role_title, organization, phone, email, notes)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      input.site_id,
+      input.full_name.trim(),
+      input.role_title?.trim() || null,
+      input.organization?.trim() || null,
+      input.phone?.trim() || null,
+      input.email?.trim() || null,
+      input.notes?.trim() || null,
+    );
+    return this.getSiteContact(Number(result.lastInsertRowid))!;
+  }
+
+  updateSiteContact(id: number, patch: Partial<{
+    full_name: string;
+    role_title: string;
+    organization: string;
+    phone: string;
+    email: string;
+    notes: string;
+  }>): SiteContact | null {
+    const existing = this.getSiteContact(id);
+    if (!existing) return null;
+
+    const updates: string[] = [];
+    const params: unknown[] = [];
+    const setStringField = (col: string, val: string | undefined) => {
+      if (val === undefined) return;
+      updates.push(`${col} = ?`);
+      params.push(val.trim() || null);
+    };
+    setStringField("full_name", patch.full_name);
+    setStringField("role_title", patch.role_title);
+    setStringField("organization", patch.organization);
+    setStringField("phone", patch.phone);
+    setStringField("email", patch.email);
+    setStringField("notes", patch.notes);
+
+    // Disallow blanking full_name.
+    if (patch.full_name !== undefined && !patch.full_name.trim()) {
+      throw new Error("full_name cannot be empty");
+    }
+
+    if (updates.length === 0) return existing;
+    updates.push("updated_at = CURRENT_TIMESTAMP");
+    params.push(id);
+    getDb().prepare(`UPDATE site_contacts SET ${updates.join(", ")} WHERE id = ?`).run(...params);
+    return this.getSiteContact(id);
+  }
+
+  deleteSiteContact(id: number): boolean {
+    const result = getDb().prepare("DELETE FROM site_contacts WHERE id = ?").run(id);
+    return result.changes > 0;
   }
 
   /** Copy data/app.db to backups/app.db.<timestamp> before destructive operations. */

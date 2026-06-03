@@ -9,7 +9,7 @@ import SiteHeader from "@/components/site-profile/SiteHeader";
 import SiteOverview from "@/components/site-profile/SiteOverview";
 import RadarTable from "@/components/site-profile/RadarTable";
 import ActivitiesSection from "@/components/site-profile/ActivitiesSection";
-import ContactsSection from "@/components/site-profile/ContactsSection";
+import SiteContactsCard from "@/components/site-profile/SiteContactsCard";
 import SourcesSection from "@/components/site-profile/SourcesSection";
 import ActivityTimeline from "@/components/site-profile/ActivityTimeline";
 import { ArrowRight, Loader2, Calendar, ShieldCheck } from "lucide-react";
@@ -63,7 +63,7 @@ export default function SiteProfilePage() {
 
   return (
     <div className="flex-1 overflow-auto bg-gray-50">
-      <div className="max-w-5xl mx-auto p-6 space-y-6">
+      <div className="max-w-7xl mx-auto p-6 space-y-6">
         <Link
           href="/map"
           className="inline-flex items-center gap-2 text-sm text-gray-600 hover:text-gray-900"
@@ -73,47 +73,68 @@ export default function SiteProfilePage() {
 
         <SiteHeader site={site} />
 
-        <SiteMiniMap
-          latitude={site.latitude}
-          longitude={site.longitude}
-          sizeCategory={site.size_category}
-          siteName={site.site_name}
-        />
+        {/*
+          Salesforce-style two-column record page.
 
-        <SiteOverview site={site} />
+          The page is RTL: the first grid child is rendered on the visual
+          RIGHT, so the ActivityTimeline (placed first in DOM) ends up on the
+          right side on desktop. Below the `lg` breakpoint the grid collapses
+          to a single column and the timeline stacks above the main content.
 
-        <ActivityTimeline siteId={site.site_id} />
-
-        <ActivitiesSection activities={site.activities || []} />
-
-        <RadarTable radars={site.radars || []} sources={site.sources || []} />
-
-        <ContactsSection contacts={site.contacts || []} />
-
-        <SourcesSection sources={site.sources || []} />
-
-        <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
-          <h2 className="text-lg font-semibold text-gray-900 mb-3">איכות נתונים</h2>
-          <div className="grid grid-cols-3 gap-4">
-            <div className="flex items-center gap-3">
-              <ShieldCheck className="w-5 h-5 text-green-500" />
-              <div>
-                <p className="text-xs text-gray-500">מהימנות</p>
-                <p className="text-sm font-medium">{site.confidence_level}</p>
-              </div>
+          lg:items-start lets the right column be a sticky column without the
+          grid stretching it vertically.
+        */}
+        <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 lg:items-start">
+          {/* Right column (RTL: first in DOM = visual right) */}
+          <aside className="lg:col-span-4 lg:order-first">
+            <div className="lg:sticky lg:top-4">
+              <ActivityTimeline siteId={site.site_id} />
             </div>
-            <div className="flex items-center gap-3">
-              <Calendar className="w-5 h-5 text-blue-500" />
-              <div>
-                <p className="text-xs text-gray-500">אימות אחרון</p>
-                <p className="text-sm font-medium">{site.last_verified_date}</p>
-              </div>
-            </div>
-            <div className="flex items-center gap-3">
-              <ShieldCheck className="w-5 h-5 text-purple-500" />
-              <div>
-                <p className="text-xs text-gray-500">סטטוס רשומה</p>
-                <p className="text-sm font-medium">{site.record_status}</p>
+          </aside>
+
+          {/* Main / left column */}
+          <div className="lg:col-span-8 space-y-6">
+            <SiteMiniMap
+              latitude={site.latitude}
+              longitude={site.longitude}
+              sizeCategory={site.size_category}
+              siteName={site.site_name}
+            />
+
+            <SiteOverview site={site} />
+
+            <SiteContactsCard siteId={site.site_id} importedContacts={site.contacts || []} />
+
+            <ActivitiesSection activities={site.activities || []} />
+
+            <RadarTable radars={site.radars || []} sources={site.sources || []} />
+
+            <SourcesSection sources={site.sources || []} />
+
+            <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
+              <h2 className="text-lg font-semibold text-gray-900 mb-3">איכות נתונים</h2>
+              <div className="grid grid-cols-3 gap-4">
+                <div className="flex items-center gap-3">
+                  <ShieldCheck className="w-5 h-5 text-green-500" />
+                  <div>
+                    <p className="text-xs text-gray-500">מהימנות</p>
+                    <p className="text-sm font-medium">{site.confidence_level}</p>
+                  </div>
+                </div>
+                <div className="flex items-center gap-3">
+                  <Calendar className="w-5 h-5 text-blue-500" />
+                  <div>
+                    <p className="text-xs text-gray-500">אימות אחרון</p>
+                    <p className="text-sm font-medium">{site.last_verified_date}</p>
+                  </div>
+                </div>
+                <div className="flex items-center gap-3">
+                  <ShieldCheck className="w-5 h-5 text-purple-500" />
+                  <div>
+                    <p className="text-xs text-gray-500">סטטוס רשומה</p>
+                    <p className="text-sm font-medium">{site.record_status}</p>
+                  </div>
+                </div>
               </div>
             </div>
           </div>

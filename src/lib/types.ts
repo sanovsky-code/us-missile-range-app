@@ -133,6 +133,25 @@ export interface ImportResult {
   warnings: ValidationError[];
 }
 
+// --- Site contacts (user-managed, CRUD) -----------------------------------
+//
+// Distinct from the existing `Contact` interface above (Excel-imported public
+// contacts that go through the `contacts` table). These are added/edited by
+// the customer from the UI and live in the `site_contacts` table.
+
+export interface SiteContact {
+  id: number;
+  site_id: string;
+  full_name: string;
+  role_title?: string;
+  organization?: string;
+  phone?: string;
+  email?: string;
+  notes?: string;
+  created_at: string;
+  updated_at?: string;
+}
+
 // --- Activity timeline -----------------------------------------------------
 
 export const ACTIVITY_TYPES = [

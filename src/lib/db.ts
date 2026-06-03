@@ -199,6 +199,26 @@ CREATE TABLE IF NOT EXISTS site_tasks (
   FOREIGN KEY (site_id) REFERENCES sites(site_id) ON DELETE CASCADE
 );
 
+-- User-managed contacts attached to a site (full CRUD from the UI).
+-- Separate from the imported contacts table above, which holds the
+-- read-only Public Affairs / source contacts pulled from the Excel data.
+-- site_id is TEXT to match sites.site_id (e.g. "SITE-0170").
+CREATE TABLE IF NOT EXISTS site_contacts (
+  id            INTEGER PRIMARY KEY AUTOINCREMENT,
+  site_id       TEXT NOT NULL,
+  full_name     TEXT NOT NULL,
+  role_title    TEXT,
+  organization  TEXT,
+  phone         TEXT,
+  email         TEXT,
+  notes         TEXT,
+  created_at    TEXT DEFAULT CURRENT_TIMESTAMP,
+  updated_at    TEXT,
+  FOREIGN KEY (site_id) REFERENCES sites(site_id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_site_contacts_site_id ON site_contacts(site_id);
+CREATE INDEX IF NOT EXISTS idx_site_contacts_email ON site_contacts(email);
+
 -- Tiny key/value table for migrations / app metadata
 CREATE TABLE IF NOT EXISTS app_meta (
   key   TEXT PRIMARY KEY,

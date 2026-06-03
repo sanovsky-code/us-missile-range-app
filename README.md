@@ -37,11 +37,18 @@ backups/
 
 You do **not** need to open `app.db` directly. It is read by the application behind the scenes.
 
-## Working with sites — the Activity Timeline
+## Working with sites — Salesforce-style record page
 
-Open the **Map** tab, click any marker, then "View Full Profile" (or use the search box in the filter sidebar). On every site profile a **ציר זמן פעילויות / Activity Timeline** card lists everything that has happened on that site, newest first — Salesforce style.
+Open the **Map** tab, click any marker, then "View Full Profile" (or use the search box in the filter sidebar). Every site page is laid out like a Salesforce record:
 
-Three activity types are supported today:
+- **Right column** (sticky on desktop): the **ציר זמן פעילויות / Activity Timeline** — comments, tasks, and task-update history for this site, newest first.
+- **Main column** (left): site metadata, map, overview, **אנשי קשר / Contacts**, operational activities, radars, sources, data-quality footer.
+
+On narrow screens the layout collapses to a single column and the timeline stacks above the rest of the page.
+
+## Activity Timeline (right column)
+
+The timeline supports three activity types today:
 
 - **Comment** — Free-text note ("Comment added"). Click "הערה חדשה" / "Comment" to add one. Comments are append-only: editing or deleting an old comment is not part of the UI flow.
 - **Task** — Click "משימה חדשה" / "Task" to create one. A task has a subject, description, priority (Low / Medium / High), due date, and assignee. Default status is "Open".
@@ -52,6 +59,40 @@ When a task moves to status "Done", the application also stamps `completed_at` o
 Use the filter chips above the timeline (`הכל / הערות / משימות / היסטוריה`) to focus on one activity type. Each task card has an inline status dropdown so you can move it through its lifecycle without leaving the timeline.
 
 The **Management** tab in the top navigation is a cross-site work queue. By default it shows only **active tasks** (Open or In Progress) across every site, with filters for status, priority, and site. Closed tasks remain visible inside their site's timeline; they simply drop off the Management default view. Toggle "הצג גם משימות סגורות" to include them.
+
+## Site contacts (main column)
+
+The **אנשי קשר** card on the main column is a full CRUD view of contacts attached to the site.
+
+- Click **הוסף איש קשר** to add a contact. Required: full name. Optional: role / organization / phone / email / notes.
+- Hover any contact and click the pencil icon to **edit**, or the trash icon to **delete** (with confirmation).
+- If the site has no user-added contacts and no imported public-affairs entries, the empty state reads **"אין מידע ציבורי ליצירת קשר."**
+- The card also displays the read-only **"אנשי קשר ציבוריים מהמקורות"** sub-list — the Public Affairs offices imported from the Excel sources. Those entries can't be edited from the UI because they belong to the source data.
+
+Contacts you add through the UI live in the new `site_contacts` SQLite table:
+
+```
+site_contacts (id, site_id TEXT FK, full_name, role_title, organization,
+               phone, email, notes, created_at, updated_at)
+```
+
+Indexes: `site_id`, `email`. FK is `ON DELETE CASCADE`.
+
+API endpoints:
+
+- `GET /api/sites/:siteId/contacts` — list
+- `POST /api/sites/:siteId/contacts` — create (body: `{full_name, role_title?, organization?, phone?, email?, notes?}`)
+- `PATCH /api/contacts/:id` — partial update
+- `DELETE /api/contacts/:id` — delete
+
+### How to test contacts
+
+1. Open a site profile.
+2. Click **הוסף איש קשר**, fill the form, click **שמירה**. The new card appears in the list.
+3. Refresh the browser — the contact is still there (it's in `site_contacts`).
+4. Click the pencil icon on the card, change a field, click **שמירה**. The card updates and `updated_at` is stamped.
+5. Click the trash icon → confirm. The card is removed.
+6. If a site has imported public contacts (e.g. White Sands Missile Range), they appear under the **"אנשי קשר ציבוריים מהמקורות"** subheading below your editable contacts. Try adding a custom contact and verify both lists are visible.
 
 ### SQLite tables that back the timeline
 
@@ -80,6 +121,7 @@ The database contains:
 |---|---|
 | `sites`, `radars`, `activities`, `sources`, `contacts` | Static reference data imported from Excel |
 | `site_activities` | Unified Activity Timeline (Comments, Tasks, Task Updates, …) |
+| `site_contacts` | User-managed contacts attached to a site (full CRUD) |
 | `site_comments`, `site_tasks` | Legacy tables, retained for migration only — no longer written to |
 | `files` | Metadata for file attachments (actual files live under `/files/`) |
 | `app_meta` | Migration markers (last import time, etc.) |
