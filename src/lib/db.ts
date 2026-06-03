@@ -140,9 +140,42 @@ CREATE TABLE IF NOT EXISTS files (
 );
 CREATE INDEX IF NOT EXISTS idx_files_entity ON files(entity_type, entity_id);
 
--- User comments on sites. History is preserved by always inserting a new row
--- (existing rows are never overwritten or deleted by the UI).
+-- Salesforce-style unified Activity Timeline.
+-- A single table stores comments, tasks, task updates, and any future
+-- activity types (Call, Email, Meeting, Note). The activity_type field
+-- discriminates between them. parent_activity_id links a "Task Update"
+-- back to the original "Task" it describes, so status-change history is
+-- preserved instead of being silently overwritten.
 -- site_id is TEXT to match sites.site_id (e.g. "SITE-0170").
+CREATE TABLE IF NOT EXISTS site_activities (
+  id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+  site_id             TEXT NOT NULL,
+  activity_type       TEXT NOT NULL,
+  subject             TEXT NOT NULL,
+  body                TEXT,
+  status              TEXT,
+  priority            TEXT,
+  due_date            TEXT,
+  assigned_to         TEXT,
+  created_by          TEXT,
+  created_at          TEXT DEFAULT CURRENT_TIMESTAMP,
+  updated_at          TEXT,
+  completed_at        TEXT,
+  parent_activity_id  INTEGER,
+  FOREIGN KEY (site_id) REFERENCES sites(site_id) ON DELETE CASCADE,
+  FOREIGN KEY (parent_activity_id) REFERENCES site_activities(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_site_activities_site_id ON site_activities(site_id);
+CREATE INDEX IF NOT EXISTS idx_site_activities_type ON site_activities(activity_type);
+CREATE INDEX IF NOT EXISTS idx_site_activities_status ON site_activities(status);
+CREATE INDEX IF NOT EXISTS idx_site_activities_due_date ON site_activities(due_date);
+CREATE INDEX IF NOT EXISTS idx_site_activities_parent ON site_activities(parent_activity_id);
+CREATE INDEX IF NOT EXISTS idx_site_activities_created_at ON site_activities(created_at);
+
+-- The previous, separate site_comments / site_tasks tables remain defined
+-- so existing customer databases keep working. They are no longer written
+-- to by the application; on first boot a migration copies their rows into
+-- site_activities and records a marker in app_meta so it never runs twice.
 CREATE TABLE IF NOT EXISTS site_comments (
   id            INTEGER PRIMARY KEY AUTOINCREMENT,
   site_id       TEXT NOT NULL,
@@ -152,11 +185,6 @@ CREATE TABLE IF NOT EXISTS site_comments (
   updated_at    TEXT,
   FOREIGN KEY (site_id) REFERENCES sites(site_id) ON DELETE CASCADE
 );
-CREATE INDEX IF NOT EXISTS idx_site_comments_site_id ON site_comments(site_id);
-
--- Tasks linked to a site. Status and priority are constrained at the
--- application layer (TS enums) but kept as TEXT in SQLite for forward
--- compatibility.
 CREATE TABLE IF NOT EXISTS site_tasks (
   id            INTEGER PRIMARY KEY AUTOINCREMENT,
   site_id       TEXT NOT NULL,
@@ -170,10 +198,6 @@ CREATE TABLE IF NOT EXISTS site_tasks (
   updated_at    TEXT,
   FOREIGN KEY (site_id) REFERENCES sites(site_id) ON DELETE CASCADE
 );
-CREATE INDEX IF NOT EXISTS idx_site_tasks_site_id ON site_tasks(site_id);
-CREATE INDEX IF NOT EXISTS idx_site_tasks_status ON site_tasks(status);
-CREATE INDEX IF NOT EXISTS idx_site_tasks_due_date ON site_tasks(due_date);
-CREATE INDEX IF NOT EXISTS idx_site_tasks_priority ON site_tasks(priority);
 
 -- Tiny key/value table for migrations / app metadata
 CREATE TABLE IF NOT EXISTS app_meta (
@@ -224,8 +248,96 @@ export function getDb(): Database.Database {
     );
   }
 
+  // Run one-shot migrations. Each migration is keyed by name in app_meta;
+  // running twice is a no-op.
+  try {
+    migrateCommentsAndTasksToActivities(db);
+  } catch (err) {
+    console.warn("Activity migration failed:", err);
+    // Non-fatal: the app still works with an empty site_activities table.
+  }
+
   holder.db = db;
   return db;
+}
+
+
+/**
+ * One-shot migration: copy any rows from the old site_comments / site_tasks
+ * tables into the unified site_activities table. Marks itself done in app_meta
+ * so it never runs twice. Empty source tables are a no-op.
+ */
+function migrateCommentsAndTasksToActivities(db: Database.Database): void {
+  const KEY = "activities_migration_v1";
+  const done = db.prepare("SELECT value FROM app_meta WHERE key = ?").get(KEY);
+  if (done) return;
+
+  const txn = db.transaction(() => {
+    const commentsExist = db.prepare(
+      "SELECT name FROM sqlite_master WHERE type='table' AND name='site_comments'"
+    ).get();
+    const tasksExist = db.prepare(
+      "SELECT name FROM sqlite_master WHERE type='table' AND name='site_tasks'"
+    ).get();
+
+    let migratedComments = 0;
+    let migratedTasks = 0;
+
+    if (commentsExist) {
+      const insComment = db.prepare(`
+        INSERT INTO site_activities
+          (site_id, activity_type, subject, body, created_by, created_at, updated_at)
+        VALUES (?, 'Comment', 'Comment added', ?, ?, ?, ?)
+      `);
+      const comments = db.prepare("SELECT * FROM site_comments ORDER BY id").all() as Array<{
+        site_id: string; comment_text: string; created_by: string | null;
+        created_at: string; updated_at: string | null;
+      }>;
+      for (const c of comments) {
+        insComment.run(c.site_id, c.comment_text, c.created_by, c.created_at, c.updated_at);
+        migratedComments++;
+      }
+    }
+
+    if (tasksExist) {
+      const insTask = db.prepare(`
+        INSERT INTO site_activities
+          (site_id, activity_type, subject, body, status, priority, due_date,
+           created_by, created_at, updated_at, completed_at)
+        VALUES (?, 'Task', ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `);
+      const tasks = db.prepare("SELECT * FROM site_tasks ORDER BY id").all() as Array<{
+        site_id: string; title: string; description: string | null;
+        status: string; priority: string; due_date: string | null;
+        created_by: string | null; created_at: string; updated_at: string | null;
+      }>;
+      for (const t of tasks) {
+        const completedAt = t.status === "Done" ? (t.updated_at ?? t.created_at) : null;
+        insTask.run(
+          t.site_id, t.title, t.description, t.status, t.priority, t.due_date,
+          t.created_by, t.created_at, t.updated_at, completedAt,
+        );
+        migratedTasks++;
+      }
+    }
+
+    db.prepare("INSERT INTO app_meta (key, value) VALUES (?, ?)").run(
+      KEY,
+      JSON.stringify({
+        at: new Date().toISOString(),
+        migrated_comments: migratedComments,
+        migrated_tasks: migratedTasks,
+      }),
+    );
+
+    if (migratedComments > 0 || migratedTasks > 0) {
+      console.log(
+        `Migrated ${migratedComments} comments and ${migratedTasks} tasks into site_activities.`
+      );
+    }
+  });
+
+  txn();
 }
 
 

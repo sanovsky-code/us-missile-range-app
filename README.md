@@ -37,14 +37,26 @@ backups/
 
 You do **not** need to open `app.db` directly. It is read by the application behind the scenes.
 
-## Working with sites
+## Working with sites — the Activity Timeline
 
-Open the **Map** tab, click any marker, then "View Full Profile" (or use the search box in the filter sidebar). On every site profile you can:
+Open the **Map** tab, click any marker, then "View Full Profile" (or use the search box in the filter sidebar). On every site profile a **ציר זמן פעילויות / Activity Timeline** card lists everything that has happened on that site, newest first — Salesforce style.
 
-- **Tasks** — Create a task linked to the site (title, description, priority, due date). Update its status (Open → In Progress → Done / Cancelled) directly from the list. Tasks are stored in SQLite and survive restarts.
-- **Comments** — Add free-text comments. Every comment is appended to the site's history (newest first) and is **never overwritten**, so the full history is always visible.
+Three activity types are supported today:
 
-The **Management** tab in the top navigation shows every task across every site in one table — filterable by status and priority — with a direct link to the related site. Use it as a daily worklist.
+- **Comment** — Free-text note ("Comment added"). Click "הערה חדשה" / "Comment" to add one. Comments are append-only: editing or deleting an old comment is not part of the UI flow.
+- **Task** — Click "משימה חדשה" / "Task" to create one. A task has a subject, description, priority (Low / Medium / High), due date, and assignee. Default status is "Open".
+- **Task Update** — Generated automatically whenever a task status changes. The original task is updated AND a new "Task Update" row is written that points back at the original task via `parent_activity_id`, so the timeline preserves the full status history (e.g. "Status changed from Open to In Progress").
+
+When a task moves to status "Done", the application also stamps `completed_at` on the row. Re-opening a closed task clears `completed_at` and writes another Task Update row.
+
+Use the filter chips above the timeline (`הכל / הערות / משימות / היסטוריה`) to focus on one activity type. Each task card has an inline status dropdown so you can move it through its lifecycle without leaving the timeline.
+
+The **Management** tab in the top navigation is a cross-site work queue. By default it shows only **active tasks** (Open or In Progress) across every site, with filters for status, priority, and site. Closed tasks remain visible inside their site's timeline; they simply drop off the Management default view. Toggle "הצג גם משימות סגורות" to include them.
+
+### SQLite tables that back the timeline
+
+- `site_activities` — Unified table for every activity type. Columns: `id`, `site_id` (TEXT FK to `sites.site_id`), `activity_type`, `subject`, `body`, `status`, `priority`, `due_date`, `assigned_to`, `created_by`, `created_at`, `updated_at`, `completed_at`, `parent_activity_id` (self-FK to the parent Task for Task Update history rows). Indexed on `site_id`, `activity_type`, `status`, `due_date`, `parent_activity_id`, and `created_at`.
+- The older `site_comments` and `site_tasks` tables remain in the schema for backwards compatibility. They are no longer written to. The first time the app boots against a database that has data in those tables, a one-shot migration copies their rows into `site_activities` and records `activities_migration_v1` in `app_meta` so it does not run twice.
 
 ## Re-importing the Excel file
 
@@ -67,8 +79,8 @@ The database contains:
 | Table | Purpose |
 |---|---|
 | `sites`, `radars`, `activities`, `sources`, `contacts` | Static reference data imported from Excel |
-| `site_comments` | User-added comments per site (history preserved, never overwritten) |
-| `site_tasks` | User-created tasks per site (status, priority, due date) |
+| `site_activities` | Unified Activity Timeline (Comments, Tasks, Task Updates, …) |
+| `site_comments`, `site_tasks` | Legacy tables, retained for migration only — no longer written to |
 | `files` | Metadata for file attachments (actual files live under `/files/`) |
 | `app_meta` | Migration markers (last import time, etc.) |
 

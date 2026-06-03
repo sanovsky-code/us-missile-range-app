@@ -20,9 +20,10 @@ import {
   SiteListItem,
   FilterState,
   FilterOptions,
-  SiteComment,
-  SiteTask,
-  SiteTaskWithSite,
+  SiteTimelineActivity,
+  SiteTimelineActivityWithSite,
+  ActivityType,
+  ACTIVITY_TYPES,
   TaskStatus,
   TaskPriority,
   TASK_STATUSES,
@@ -593,106 +594,103 @@ class DataStore {
   }
 
 
-  // --- Comments -----------------------------------------------------------
+  // --- Activity Timeline --------------------------------------------------
+  //
+  // The site_activities table holds every user action on a site (comments,
+  // tasks, task updates). A status change on a task is persisted in TWO
+  // places: the original row's status field is updated, AND a new
+  // "Task Update" row is inserted with parent_activity_id pointing at the
+  // original task. That history record is what makes the timeline complete.
 
-  listCommentsForSite(siteId: string): SiteComment[] {
+  listActivitiesForSite(siteId: string, type?: ActivityType): SiteTimelineActivity[] {
+    if (type) {
+      return getDb()
+        .prepare(`SELECT * FROM site_activities
+                  WHERE site_id = ? AND activity_type = ?
+                  ORDER BY datetime(created_at) DESC, id DESC`)
+        .all(siteId, type) as SiteTimelineActivity[];
+    }
     return getDb()
-      .prepare("SELECT * FROM site_comments WHERE site_id = ? ORDER BY datetime(created_at) DESC, id DESC")
-      .all(siteId) as SiteComment[];
+      .prepare(`SELECT * FROM site_activities WHERE site_id = ?
+                ORDER BY datetime(created_at) DESC, id DESC`)
+      .all(siteId) as SiteTimelineActivity[];
   }
 
-  addComment(siteId: string, text: string, createdBy?: string): SiteComment {
-    if (!text || !text.trim()) {
-      throw new Error("Comment text is required");
-    }
-    // Verify the site exists, otherwise SQLite raises a foreign key error.
-    const exists = getDb().prepare("SELECT 1 FROM sites WHERE site_id = ?").get(siteId);
-    if (!exists) throw new Error(`Site "${siteId}" not found`);
-
-    const result = getDb()
-      .prepare("INSERT INTO site_comments (site_id, comment_text, created_by) VALUES (?, ?, ?)")
-      .run(siteId, text.trim(), createdBy ?? null);
-    const id = Number(result.lastInsertRowid);
-    return getDb().prepare("SELECT * FROM site_comments WHERE id = ?").get(id) as SiteComment;
+  getActivityById(id: number): SiteTimelineActivity | null {
+    const row = getDb().prepare("SELECT * FROM site_activities WHERE id = ?").get(id);
+    return (row as SiteTimelineActivity | undefined) ?? null;
   }
 
-  // --- Tasks --------------------------------------------------------------
-
-  listTasksForSite(siteId: string): SiteTask[] {
-    return getDb()
-      .prepare(`SELECT * FROM site_tasks WHERE site_id = ?
-                ORDER BY (status IN ('Done','Cancelled')) ASC,
-                         datetime(due_date) IS NULL,
-                         datetime(due_date) ASC,
-                         id DESC`)
-      .all(siteId) as SiteTask[];
-  }
-
-  listAllTasks(filters?: { status?: TaskStatus[]; priority?: TaskPriority[] }): SiteTaskWithSite[] {
-    const where: string[] = [];
-    const params: unknown[] = [];
-    if (filters?.status && filters.status.length > 0) {
-      where.push(`t.status IN (${filters.status.map(() => "?").join(",")})`);
-      params.push(...filters.status);
-    }
-    if (filters?.priority && filters.priority.length > 0) {
-      where.push(`t.priority IN (${filters.priority.map(() => "?").join(",")})`);
-      params.push(...filters.priority);
-    }
-    const sql = `
-      SELECT t.*, s.site_name AS site_name, s.country AS country
-      FROM site_tasks t
-      JOIN sites s ON s.site_id = t.site_id
-      ${where.length ? "WHERE " + where.join(" AND ") : ""}
-      ORDER BY
-        (t.status IN ('Done','Cancelled')) ASC,
-        datetime(t.due_date) IS NULL,
-        datetime(t.due_date) ASC,
-        t.id DESC
-    `;
-    return getDb().prepare(sql).all(...params) as SiteTaskWithSite[];
-  }
-
-  createTask(task: {
+  /**
+   * Create a comment, task, or task-update row. Tasks default to status=Open,
+   * priority=Medium. The caller (API route or migration) controls activity_type.
+   */
+  createActivity(input: {
     site_id: string;
-    title: string;
-    description?: string;
+    activity_type: ActivityType;
+    subject: string;
+    body?: string;
     status?: TaskStatus;
     priority?: TaskPriority;
     due_date?: string;
+    assigned_to?: string;
     created_by?: string;
-  }): SiteTask {
-    if (!task.title || !task.title.trim()) throw new Error("Title is required");
-    const exists = getDb().prepare("SELECT 1 FROM sites WHERE site_id = ?").get(task.site_id);
-    if (!exists) throw new Error(`Site "${task.site_id}" not found`);
+    parent_activity_id?: number;
+  }): SiteTimelineActivity {
+    if (!ACTIVITY_TYPES.includes(input.activity_type)) {
+      throw new Error(`Invalid activity_type: ${input.activity_type}`);
+    }
+    if (!input.subject || !input.subject.trim()) {
+      throw new Error("subject is required");
+    }
+    const siteExists = getDb().prepare("SELECT 1 FROM sites WHERE site_id = ?").get(input.site_id);
+    if (!siteExists) throw new Error(`Site "${input.site_id}" not found`);
 
-    const status = task.status && TASK_STATUSES.includes(task.status) ? task.status : "Open";
-    const priority = task.priority && TASK_PRIORITIES.includes(task.priority) ? task.priority : "Medium";
+    let status: TaskStatus | null = null;
+    let priority: TaskPriority | null = null;
+    if (input.activity_type === "Task") {
+      status = input.status && TASK_STATUSES.includes(input.status) ? input.status : "Open";
+      priority = input.priority && TASK_PRIORITIES.includes(input.priority) ? input.priority : "Medium";
+    } else if (input.status && TASK_STATUSES.includes(input.status)) {
+      status = input.status;
+    }
 
-    const result = getDb()
-      .prepare(`INSERT INTO site_tasks (site_id, title, description, status, priority, due_date, created_by)
-                VALUES (?, ?, ?, ?, ?, ?, ?)`)
-      .run(
-        task.site_id,
-        task.title.trim(),
-        task.description?.trim() || null,
-        status,
-        priority,
-        task.due_date || null,
-        task.created_by || null,
-      );
-    const id = Number(result.lastInsertRowid);
-    return getDb().prepare("SELECT * FROM site_tasks WHERE id = ?").get(id) as SiteTask;
+    const result = getDb().prepare(`
+      INSERT INTO site_activities (
+        site_id, activity_type, subject, body, status, priority, due_date,
+        assigned_to, created_by, parent_activity_id
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      input.site_id,
+      input.activity_type,
+      input.subject.trim(),
+      input.body?.trim() || null,
+      status,
+      priority,
+      input.due_date || null,
+      input.assigned_to || null,
+      input.created_by || null,
+      input.parent_activity_id ?? null,
+    );
+    return this.getActivityById(Number(result.lastInsertRowid))!;
   }
 
-  updateTask(id: number, patch: Partial<{
-    title: string;
-    description: string;
+  /**
+   * Patch an activity. When a Task's status actually changes, this method
+   * also writes a "Task Update" history row that references the original
+   * task via parent_activity_id, and stamps completed_at when the new
+   * status is "Done".
+   */
+  updateActivity(id: number, patch: Partial<{
+    subject: string;
+    body: string;
     status: TaskStatus;
     priority: TaskPriority;
     due_date: string | null;
-  }>): SiteTask | null {
-    const existing = getDb().prepare("SELECT * FROM site_tasks WHERE id = ?").get(id) as SiteTask | undefined;
+    assigned_to: string | null;
+    created_by: string | null;
+  }>): SiteTimelineActivity | null {
+    const existing = this.getActivityById(id);
     if (!existing) return null;
 
     if (patch.status && !TASK_STATUSES.includes(patch.status)) {
@@ -702,24 +700,93 @@ class DataStore {
       throw new Error(`Invalid priority: ${patch.priority}`);
     }
 
-    const updates: string[] = [];
-    const params: unknown[] = [];
-    if (patch.title !== undefined) { updates.push("title = ?"); params.push(patch.title.trim()); }
-    if (patch.description !== undefined) { updates.push("description = ?"); params.push(patch.description?.trim() || null); }
-    if (patch.status !== undefined) { updates.push("status = ?"); params.push(patch.status); }
-    if (patch.priority !== undefined) { updates.push("priority = ?"); params.push(patch.priority); }
-    if (patch.due_date !== undefined) { updates.push("due_date = ?"); params.push(patch.due_date || null); }
-    if (updates.length === 0) return existing;
+    const isTask = existing.activity_type === "Task";
+    const statusChanged = isTask && patch.status !== undefined && patch.status !== existing.status;
 
-    updates.push("updated_at = CURRENT_TIMESTAMP");
-    params.push(id);
-    getDb().prepare(`UPDATE site_tasks SET ${updates.join(", ")} WHERE id = ?`).run(...params);
-    return getDb().prepare("SELECT * FROM site_tasks WHERE id = ?").get(id) as SiteTask;
+    return transaction((db) => {
+      const updates: string[] = [];
+      const params: unknown[] = [];
+      if (patch.subject !== undefined) { updates.push("subject = ?"); params.push(patch.subject.trim()); }
+      if (patch.body !== undefined) { updates.push("body = ?"); params.push(patch.body?.trim() || null); }
+      if (patch.status !== undefined) { updates.push("status = ?"); params.push(patch.status); }
+      if (patch.priority !== undefined) { updates.push("priority = ?"); params.push(patch.priority); }
+      if (patch.due_date !== undefined) { updates.push("due_date = ?"); params.push(patch.due_date || null); }
+      if (patch.assigned_to !== undefined) { updates.push("assigned_to = ?"); params.push(patch.assigned_to || null); }
+      if (statusChanged && patch.status === "Done") {
+        updates.push("completed_at = CURRENT_TIMESTAMP");
+      }
+      if (statusChanged && existing.status === "Done" && patch.status !== "Done") {
+        // Re-opening a completed task clears completed_at
+        updates.push("completed_at = NULL");
+      }
+      if (updates.length === 0) return existing;
+      updates.push("updated_at = CURRENT_TIMESTAMP");
+      params.push(id);
+      db.prepare(`UPDATE site_activities SET ${updates.join(", ")} WHERE id = ?`).run(...params);
+
+      // Insert the Task Update history row.
+      if (statusChanged) {
+        db.prepare(`
+          INSERT INTO site_activities (
+            site_id, activity_type, subject, body, parent_activity_id, created_by
+          ) VALUES (?, 'Task Update', ?, ?, ?, ?)
+        `).run(
+          existing.site_id,
+          "Task status changed",
+          `Status changed from ${existing.status ?? "(unset)"} to ${patch.status}.`,
+          id,
+          patch.created_by ?? null,
+        );
+      }
+
+      return this.getActivityById(id);
+    });
   }
 
-  deleteTask(id: number): boolean {
-    const result = getDb().prepare("DELETE FROM site_tasks WHERE id = ?").run(id);
+  deleteActivity(id: number): boolean {
+    // ON DELETE CASCADE removes any Task Update children as well.
+    const result = getDb().prepare("DELETE FROM site_activities WHERE id = ?").run(id);
     return result.changes > 0;
+  }
+
+  /**
+   * Tasks across every site, joined with the site name + country. The
+   * Management page calls this. Defaults to active tasks only.
+   */
+  listAllTaskActivities(filters?: {
+    status?: TaskStatus[];
+    priority?: TaskPriority[];
+    site_id?: string;
+  }): SiteTimelineActivityWithSite[] {
+    const where: string[] = ["a.activity_type = 'Task'"];
+    const params: unknown[] = [];
+
+    const statuses = filters?.status && filters.status.length > 0
+      ? filters.status
+      : (["Open", "In Progress"] as TaskStatus[]);
+    where.push(`a.status IN (${statuses.map(() => "?").join(",")})`);
+    params.push(...statuses);
+
+    if (filters?.priority && filters.priority.length > 0) {
+      where.push(`a.priority IN (${filters.priority.map(() => "?").join(",")})`);
+      params.push(...filters.priority);
+    }
+    if (filters?.site_id) {
+      where.push("a.site_id = ?");
+      params.push(filters.site_id);
+    }
+
+    const sql = `
+      SELECT a.*, s.site_name AS site_name, s.country AS country
+      FROM site_activities a
+      JOIN sites s ON s.site_id = a.site_id
+      WHERE ${where.join(" AND ")}
+      ORDER BY
+        datetime(a.due_date) IS NULL,
+        datetime(a.due_date) ASC,
+        a.id DESC
+    `;
+    return getDb().prepare(sql).all(...params) as SiteTimelineActivityWithSite[];
   }
 
   /** Copy data/app.db to backups/app.db.<timestamp> before destructive operations. */

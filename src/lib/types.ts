@@ -133,14 +133,16 @@ export interface ImportResult {
   warnings: ValidationError[];
 }
 
-export interface SiteComment {
-  id: number;
-  site_id: string;
-  comment_text: string;
-  created_by?: string;
-  created_at: string;
-  updated_at?: string;
-}
+// --- Activity timeline -----------------------------------------------------
+
+export const ACTIVITY_TYPES = [
+  "Comment",
+  "Task",
+  "Task Update",
+  // Reserved for future use; the table already supports these:
+  // "Call", "Email", "Meeting", "Note",
+] as const;
+export type ActivityType = (typeof ACTIVITY_TYPES)[number];
 
 export const TASK_STATUSES = ["Open", "In Progress", "Done", "Cancelled"] as const;
 export type TaskStatus = (typeof TASK_STATUSES)[number];
@@ -148,20 +150,31 @@ export type TaskStatus = (typeof TASK_STATUSES)[number];
 export const TASK_PRIORITIES = ["Low", "Medium", "High"] as const;
 export type TaskPriority = (typeof TASK_PRIORITIES)[number];
 
-export interface SiteTask {
+/**
+ * One row in the unified Activity Timeline. The same shape covers comments,
+ * tasks, and task-update history entries. The activity_type field is the
+ * discriminator; task-only fields (status/priority/due_date/completed_at)
+ * are null for comments. parent_activity_id points a "Task Update" row back
+ * at the original "Task" it describes.
+ */
+export interface SiteTimelineActivity {
   id: number;
   site_id: string;
-  title: string;
-  description?: string;
-  status: TaskStatus;
-  priority: TaskPriority;
+  activity_type: ActivityType;
+  subject: string;
+  body?: string;
+  status?: TaskStatus;
+  priority?: TaskPriority;
   due_date?: string;
+  assigned_to?: string;
   created_by?: string;
   created_at: string;
   updated_at?: string;
+  completed_at?: string;
+  parent_activity_id?: number;
 }
 
-export interface SiteTaskWithSite extends SiteTask {
+export interface SiteTimelineActivityWithSite extends SiteTimelineActivity {
   site_name: string;
   country: string;
 }
