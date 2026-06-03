@@ -43,13 +43,15 @@ export default function SourcesSection({ sources }: { sources: Source[] }) {
       </div>
       <div className="space-y-3">
         {sources.map((source) => (
-          <Link
+          // Card is a plain <article> so we can hold two sibling <a> elements
+          // (one to the internal viewer, one to the external URL) without
+          // nesting anchors. The "stretched link" pattern below makes the
+          // entire card clickable via the internal viewer link while the
+          // external-link button stays a real <a> on top.
+          <article
             key={source.source_id}
-            href={`/source/${source.source_id}`}
-            target="_blank"
-            rel="noopener noreferrer"
             id={`source-${source.source_id}`}
-            className="flex items-start justify-between gap-4 border border-gray-100 rounded-lg p-3 scroll-mt-20 hover:border-blue-300 hover:bg-blue-50/30 transition-colors group"
+            className="relative flex items-start justify-between gap-4 border border-gray-100 rounded-lg p-3 scroll-mt-20 hover:border-blue-300 hover:bg-blue-50/30 transition-colors group"
           >
             <div className="min-w-0 flex-1">
               <div className="flex items-center gap-2 mb-1">
@@ -63,7 +65,16 @@ export default function SourcesSection({ sources }: { sources: Source[] }) {
                   </span>
                 )}
               </div>
-              <p className="text-sm font-medium text-gray-900 text-left group-hover:text-blue-700" dir="ltr">{source.source_title}</p>
+              {/* This Link is the stretched click target for the whole card */}
+              <Link
+                href={`/source/${source.source_id}`}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-sm font-medium text-gray-900 text-left group-hover:text-blue-700 before:absolute before:inset-0 before:rounded-lg before:content-[''] block focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-400"
+                dir="ltr"
+              >
+                {source.source_title}
+              </Link>
               {source.publisher && (
                 <p className="text-xs text-gray-500 text-left" dir="ltr">{source.publisher}</p>
               )}
@@ -72,7 +83,8 @@ export default function SourcesSection({ sources }: { sources: Source[] }) {
                 {source.publication_date && ` | פרסום: ${source.publication_date}`}
               </p>
             </div>
-            <div className="flex flex-col gap-1 flex-shrink-0">
+            {/* Action buttons sit above the stretched link via z-10 */}
+            <div className="flex flex-col gap-1 flex-shrink-0 relative z-10">
               <div className="p-2 text-blue-500 group-hover:bg-blue-100 rounded-lg" title="צפייה בעמוד המקור">
                 <Eye className="w-4 h-4" />
               </div>
@@ -81,7 +93,6 @@ export default function SourcesSection({ sources }: { sources: Source[] }) {
                   href={source.source_url}
                   target="_blank"
                   rel="noopener noreferrer"
-                  onClick={(e) => e.stopPropagation()}
                   className="p-2 text-gray-400 hover:text-gray-700 hover:bg-gray-100 rounded-lg"
                   title="פתח ישירות באתר המקור"
                 >
@@ -89,7 +100,7 @@ export default function SourcesSection({ sources }: { sources: Source[] }) {
                 </a>
               )}
             </div>
-          </Link>
+          </article>
         ))}
       </div>
     </div>
