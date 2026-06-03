@@ -20,7 +20,8 @@ export function validateSites(sites: Site[]): ValidationError[] {
     else if (!SIZE_CATEGORIES.includes(site.size_category as typeof SIZE_CATEGORIES[number]))
       errors.push(err("Sites", row, "size_category", site.size_category, "picklist", `Invalid size category: ${site.size_category}`));
 
-    if (!site.state) errors.push(err("Sites", row, "state", "", "required", "State is required"));
+    // state is an optional supplementary field (USA sub-national designator).
+    // Not validated - country + lat/lon already identify the location.
     if (!site.managing_organization) errors.push(err("Sites", row, "managing_organization", "", "required", "Managing organization is required"));
     if (!site.description) errors.push(err("Sites", row, "description", "", "required", "Description is required"));
 
@@ -49,18 +50,16 @@ export function validateSites(sites: Site[]): ValidationError[] {
       errors.push(err("Sites", row, "website", site.website, "format", "Invalid URL format", "warning"));
   });
 
-  // Duplicate detection
+  // Duplicate detection - only flag exact name duplicates within the same country.
+  // Coordinate-similarity alone is noisy (radars co-located with their host base
+  // legitimately share coords) so it's no longer flagged.
   for (let i = 0; i < sites.length; i++) {
     for (let j = i + 1; j < sites.length; j++) {
-      if (sites[i].site_name.toLowerCase() === sites[j].site_name.toLowerCase()) {
+      if (
+        sites[i].site_name.toLowerCase() === sites[j].site_name.toLowerCase() &&
+        (sites[i].country || "").toLowerCase() === (sites[j].country || "").toLowerCase()
+      ) {
         errors.push(err("Sites", j + 2, "site_name", sites[j].site_name, "duplicate", `Duplicate site name: "${sites[j].site_name}" (same as row ${i + 2})`, "warning"));
-      }
-      if (sites[i].latitude && sites[j].latitude) {
-        const latDiff = Math.abs(sites[i].latitude - sites[j].latitude);
-        const lonDiff = Math.abs(sites[i].longitude - sites[j].longitude);
-        if (latDiff < 0.01 && lonDiff < 0.01) {
-          errors.push(err("Sites", j + 2, "latitude", `${sites[j].latitude},${sites[j].longitude}`, "duplicate", `Coordinates very close to site "${sites[i].site_name}" (row ${i + 2})`, "warning"));
-        }
       }
     }
   }
@@ -89,9 +88,11 @@ export function validateRadars(radars: Radar[], siteIds: Set<string>, sourceIds:
       errors.push(err("Radars", row, "operational_status", radar.operational_status, "picklist", `Invalid operational status: ${radar.operational_status}`));
 
     if (!radar.confidence_level) errors.push(err("Radars", row, "confidence_level", "", "required", "Confidence level is required"));
-    if (!radar.source_id) errors.push(err("Radars", row, "source_id", "", "required", "Source ID is required"));
-    else if (!sourceIds.has(radar.source_id))
-      errors.push(err("Radars", row, "source_id", radar.source_id, "reference", `Source ID "${radar.source_id}" not found in Sources sheet`));
+    // source_id is optional now - canonical sources are in the `citations` field.
+    // Only validate if a value is present and it isn't a known legacy placeholder.
+    if (radar.source_id && !sourceIds.has(radar.source_id) && radar.source_id !== "SRC-001") {
+      errors.push(err("Radars", row, "source_id", radar.source_id, "reference", `Source ID "${radar.source_id}" not found in Sources sheet`, "warning"));
+    }
   });
 
   return errors;
@@ -112,9 +113,10 @@ export function validateActivities(activities: SiteActivity[], siteIds: Set<stri
       errors.push(err("Site_Activities", row, "activity_category", act.activity_category, "picklist", `Invalid activity category: ${act.activity_category}`));
 
     if (!act.activity_description) errors.push(err("Site_Activities", row, "activity_description", "", "required", "Activity description is required"));
-    if (!act.source_id) errors.push(err("Site_Activities", row, "source_id", "", "required", "Source ID is required"));
-    else if (!sourceIds.has(act.source_id))
-      errors.push(err("Site_Activities", row, "source_id", act.source_id, "reference", `Source ID "${act.source_id}" not found in Sources sheet`));
+    // source_id is optional - canonical sources are in `citations` on the parent site
+    if (act.source_id && !sourceIds.has(act.source_id) && act.source_id !== "SRC-001") {
+      errors.push(err("Site_Activities", row, "source_id", act.source_id, "reference", `Source ID "${act.source_id}" not found in Sources sheet`, "warning"));
+    }
   });
 
   return errors;
@@ -127,9 +129,11 @@ export function validateSources(sources: Source[]): ValidationError[] {
     const row = i + 2;
     if (!src.source_id) errors.push(err("Sources", row, "source_id", "", "required", "Source ID is required"));
     if (!src.source_title) errors.push(err("Sources", row, "source_title", "", "required", "Source title is required"));
-    if (!src.source_url) errors.push(err("Sources", row, "source_url", "", "required", "Source URL is required"));
-    else if (!/^https?:\/\/.+/.test(src.source_url))
-      errors.push(err("Sources", row, "source_url", src.source_url, "format", "Invalid URL format"));
+    // source_url is optional - some sources are uploaded documents (PDFs) with no public URL.
+    // Only validate format if present.
+    if (src.source_url && !/^https?:\/\/.+/.test(src.source_url)) {
+      errors.push(err("Sources", row, "source_url", src.source_url, "format", "Invalid URL format", "warning"));
+    }
     if (!src.source_type) errors.push(err("Sources", row, "source_type", "", "required", "Source type is required"));
     if (!src.access_date) errors.push(err("Sources", row, "access_date", "", "required", "Access date is required"));
   });
@@ -147,9 +151,10 @@ export function validateContacts(contacts: Contact[], siteIds: Set<string>, sour
     else if (!siteIds.has(con.site_id))
       errors.push(err("Contacts", row, "site_id", con.site_id, "reference", `Site ID "${con.site_id}" not found in Sites sheet`));
     if (!con.organization_name) errors.push(err("Contacts", row, "organization_name", "", "required", "Organization name is required"));
-    if (!con.source_id) errors.push(err("Contacts", row, "source_id", "", "required", "Source ID is required"));
-    else if (!sourceIds.has(con.source_id))
-      errors.push(err("Contacts", row, "source_id", con.source_id, "reference", `Source ID "${con.source_id}" not found in Sources sheet`));
+    // source_id optional - canonical sources are in `citations` on the parent site
+    if (con.source_id && !sourceIds.has(con.source_id) && con.source_id !== "SRC-001") {
+      errors.push(err("Contacts", row, "source_id", con.source_id, "reference", `Source ID "${con.source_id}" not found in Sources sheet`, "warning"));
+    }
 
     if (con.contact_email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(con.contact_email))
       errors.push(err("Contacts", row, "contact_email", con.contact_email, "format", "Invalid email format", "warning"));
