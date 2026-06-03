@@ -375,11 +375,14 @@ class DataStore {
       }
     }
 
+    // Select the fields needed for the list item PLUS the relevance/description
+    // fields required by computeSpecializations. One round-trip.
     const sql = `
       SELECT
         site_id, site_name, site_type, size_category, country, state,
         latitude, longitude, coordinate_type, operator, managing_organization,
         confidence_level, record_status,
+        description, missile_relevance, launch_relevance, radar_relevance,
         (SELECT COUNT(*) FROM radars WHERE radars.site_id = sites.site_id) AS radar_count,
         (SELECT COUNT(*) FROM activities WHERE activities.site_id = sites.site_id) AS activity_count
       FROM sites
@@ -388,26 +391,55 @@ class DataStore {
     `;
     const rows = db.prepare(sql).all(params) as Record<string, unknown>[];
 
+    // Bulk-fetch radars and activities for ALL matching sites in two queries
+    // (instead of N+N per-site lookups inside the map below).
+    const radarsBySite = new Map<string, Radar[]>();
+    const activitiesBySite = new Map<string, SiteActivity[]>();
+    if (rows.length > 0) {
+      const siteIds = rows.map((r) => String(r.site_id));
+      const placeholders = siteIds.map(() => "?").join(",");
+
+      const radarRows = db.prepare(
+        `SELECT * FROM radars WHERE site_id IN (${placeholders})`
+      ).all(...siteIds) as Record<string, unknown>[];
+      for (const r of radarRows) {
+        const sid = String(r.site_id);
+        const list = radarsBySite.get(sid) ?? [];
+        list.push(rowToRadar(r));
+        radarsBySite.set(sid, list);
+      }
+
+      const actRows = db.prepare(
+        `SELECT * FROM activities WHERE site_id IN (${placeholders})`
+      ).all(...siteIds) as Record<string, unknown>[];
+      for (const a of actRows) {
+        const sid = String(a.site_id);
+        const list = activitiesBySite.get(sid) ?? [];
+        list.push(rowToActivity(a));
+        activitiesBySite.set(sid, list);
+      }
+    }
+
     let items: SiteListItem[] = rows.map((r) => {
-      const site = rowToSite({ ...r, description: "" }); // description not needed for specializations beyond what's available
-      const radars = this.getRadarsBySite(site.site_id);
-      const activities = this.getActivitiesBySite(site.site_id);
-      // Compute specializations from radars+activities (fast - already indexed)
+      const siteId = String(r.site_id);
+      const site = rowToSite(r);
+      const radars = radarsBySite.get(siteId) ?? [];
+      const activities = activitiesBySite.get(siteId) ?? [];
       const specializations = computeSpecializations(site, radars, activities);
       return {
-        site_id: String(r.site_id),
-        site_name: String(r.site_name),
-        site_type: String(r.site_type ?? ""),
-        size_category: String(r.size_category ?? ""),
-        country: String(r.country ?? ""),
-        state: String(r.state ?? ""),
-        latitude: Number(r.latitude ?? 0),
-        longitude: Number(r.longitude ?? 0),
-        coordinate_type: String(r.coordinate_type ?? "Site centroid"),
-        operator: (r.operator as string) ?? undefined,
-        managing_organization: String(r.managing_organization ?? ""),
-        confidence_level: String(r.confidence_level ?? ""),
-        record_status: String(r.record_status ?? ""),
+        site_id: siteId,
+        site_name: site.site_name,
+        site_type: site.site_type,
+        size_category: site.size_category,
+        country: site.country,
+        state: site.state,
+        latitude: site.latitude,
+        longitude: site.longitude,
+        coordinate_type: site.coordinate_type || "Site centroid",
+        operator: site.operator,
+        managing_organization: site.managing_organization,
+        confidence_level: site.confidence_level,
+        record_status: site.record_status,
         activity_count: Number(r.activity_count ?? 0),
         radar_count: Number(r.radar_count ?? 0),
         specializations,

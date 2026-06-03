@@ -17,19 +17,6 @@ export async function buildWorkbook(
   return Buffer.from(arrayBuffer);
 }
 
-/** Write the same workbook to a file path. Kept for ad-hoc scripts. */
-export async function writeDataToExcel(
-  filePath: string,
-  sites: Site[],
-  radars: Radar[],
-  activities: SiteActivity[],
-  sources: Source[],
-  contacts: Contact[],
-): Promise<void> {
-  const workbook = buildWorkbookInstance(sites, radars, activities, sources, contacts);
-  await workbook.xlsx.writeFile(filePath);
-}
-
 function buildWorkbookInstance(
   sites: Site[],
   radars: Radar[],

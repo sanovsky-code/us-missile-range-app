@@ -99,4 +99,14 @@ Open the upload page (`/upload`) and read the validation report. Common issues: 
 
 ## Sending the project to someone else
 
-The whole folder is self-contained. You can zip the entire `us-missile-range-app/` directory and send it to a customer. They only need Node.js installed; everything else lives inside the folder. Paths in the database are all relative, so the project works as soon as it is unzipped.
+The whole folder is self-contained. To package it:
+
+1. **Stop the app** if it is running.
+2. **Delete `node_modules/`** before zipping (it will be recreated on first run on the target machine; the SQLite native module needs to be built locally).
+3. **Zip** the entire `us-missile-range-app/` directory.
+
+On the target machine the recipient needs Node.js 20 or newer. They unzip the folder and double-click `start.bat`. The launcher reinstalls dependencies, runs the Excel-to-SQLite import if the database isn't present, builds the app once, and opens the browser.
+
+All paths the application stores are project-root-relative (using forward slashes), so the project keeps working no matter which drive letter or folder it lives in.
+
+If you forget step 2 and ship `node_modules/`, `start.bat` detects the mismatch on first run and rebuilds the native SQLite module automatically — but the zip will be much larger than it needs to be.
