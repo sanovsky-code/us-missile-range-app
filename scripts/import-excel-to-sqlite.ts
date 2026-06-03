@@ -106,8 +106,14 @@ function main() {
       `${sources.length} sources, ${contacts.length} contacts`
     );
 
+    // UPSERT on conflict instead of INSERT OR REPLACE. The latter would
+    // delete the existing row and re-insert it, triggering ON DELETE
+    // CASCADE on site_activities / site_contacts / site_comments /
+    // site_tasks - wiping all user-added data attached to the site. The
+    // ON CONFLICT DO UPDATE form is a true UPDATE; no DELETE fires and
+    // user data is preserved across re-imports of the Excel source.
     const insertSite = db.prepare(`
-      INSERT OR REPLACE INTO sites (
+      INSERT INTO sites (
         site_id, site_name, site_type, size_category, size_score, country, state,
         latitude, longitude, coordinate_type, managing_organization, operator,
         missile_relevance, launch_relevance, radar_relevance,
@@ -120,6 +126,30 @@ function main() {
         @public_contact_email, @public_contact_phone, @website, @description, @citations,
         @confidence_level, @last_verified_date, @record_status
       )
+      ON CONFLICT(site_id) DO UPDATE SET
+        site_name = excluded.site_name,
+        site_type = excluded.site_type,
+        size_category = excluded.size_category,
+        size_score = excluded.size_score,
+        country = excluded.country,
+        state = excluded.state,
+        latitude = excluded.latitude,
+        longitude = excluded.longitude,
+        coordinate_type = excluded.coordinate_type,
+        managing_organization = excluded.managing_organization,
+        operator = excluded.operator,
+        missile_relevance = excluded.missile_relevance,
+        launch_relevance = excluded.launch_relevance,
+        radar_relevance = excluded.radar_relevance,
+        public_contact_email = excluded.public_contact_email,
+        public_contact_phone = excluded.public_contact_phone,
+        website = excluded.website,
+        description = excluded.description,
+        citations = excluded.citations,
+        confidence_level = excluded.confidence_level,
+        last_verified_date = excluded.last_verified_date,
+        record_status = excluded.record_status,
+        updated_at = CURRENT_TIMESTAMP
     `);
 
     const insertRadar = db.prepare(`
@@ -167,7 +197,12 @@ function main() {
     `);
 
     const runImport = db.transaction(() => {
-      db.exec("DELETE FROM contacts; DELETE FROM activities; DELETE FROM radars; DELETE FROM sites; DELETE FROM sources;");
+      // Wipe operational reference tables (no user-data is FK-linked to
+      // these, so it's safe). DO NOT delete from `sites` - that would
+      // cascade and erase site_activities / site_contacts /
+      // site_comments / site_tasks. The sites table is updated row-by-
+      // row via the ON CONFLICT DO UPDATE upsert defined above.
+      db.exec("DELETE FROM contacts; DELETE FROM activities; DELETE FROM radars; DELETE FROM sources;");
 
       for (const s of sources) {
         insertSource.run({

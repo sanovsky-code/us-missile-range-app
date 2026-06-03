@@ -190,13 +190,28 @@ class DataStore {
     getDb();
   }
 
-  /** Replace every row across all tables. Wrapped in a single transaction. */
+  /**
+   * Upsert every row from the Excel source.
+   *
+   * IMPORTANT: never DELETE FROM sites or use INSERT OR REPLACE on sites.
+   * sites.site_id has ON DELETE CASCADE from every user-data table
+   * (site_activities, site_contacts, site_comments, site_tasks), so any
+   * delete-and-reinsert pattern would silently wipe customer comments,
+   * tasks, and contacts. We use an ON CONFLICT DO UPDATE upsert on sites
+   * (a true UPDATE — no DELETE fires) to preserve those rows.
+   *
+   * Reference tables that have NO user-data linked to them (radars,
+   * activities, sources, contacts) are still cleared first and rewritten,
+   * which is fine because nothing cascades from them.
+   */
   loadFromImport(
     sites: Site[], radars: Radar[], activities: SiteActivity[],
     sources: Source[], contacts: Contact[],
   ): void {
     transaction((db) => {
-      db.exec("DELETE FROM contacts; DELETE FROM activities; DELETE FROM radars; DELETE FROM sites; DELETE FROM sources;");
+      // Wipe operational reference tables. None of these are FK targets of
+      // user-data tables, so this is safe.
+      db.exec("DELETE FROM contacts; DELETE FROM activities; DELETE FROM radars; DELETE FROM sources;");
 
       const insSource = db.prepare(`INSERT OR REPLACE INTO sources (
         source_id, source_title, source_url, source_type, publisher,
@@ -218,7 +233,11 @@ class DataStore {
         });
       }
 
-      const insSite = db.prepare(`INSERT OR REPLACE INTO sites (
+      // UPSERT (true UPDATE on conflict) so existing sites are updated in
+      // place instead of delete-then-inserted. This is what preserves any
+      // site_activities / site_contacts / site_comments / site_tasks rows
+      // attached to a site that's being re-imported.
+      const insSite = db.prepare(`INSERT INTO sites (
         site_id, site_name, site_type, size_category, size_score, country, state,
         latitude, longitude, coordinate_type, managing_organization, operator,
         missile_relevance, launch_relevance, radar_relevance,
@@ -228,7 +247,31 @@ class DataStore {
                 @latitude, @longitude, @coordinate_type, @managing_organization, @operator,
                 @missile_relevance, @launch_relevance, @radar_relevance,
                 @public_contact_email, @public_contact_phone, @website, @description, @citations,
-                @confidence_level, @last_verified_date, @record_status)`);
+                @confidence_level, @last_verified_date, @record_status)
+        ON CONFLICT(site_id) DO UPDATE SET
+          site_name = excluded.site_name,
+          site_type = excluded.site_type,
+          size_category = excluded.size_category,
+          size_score = excluded.size_score,
+          country = excluded.country,
+          state = excluded.state,
+          latitude = excluded.latitude,
+          longitude = excluded.longitude,
+          coordinate_type = excluded.coordinate_type,
+          managing_organization = excluded.managing_organization,
+          operator = excluded.operator,
+          missile_relevance = excluded.missile_relevance,
+          launch_relevance = excluded.launch_relevance,
+          radar_relevance = excluded.radar_relevance,
+          public_contact_email = excluded.public_contact_email,
+          public_contact_phone = excluded.public_contact_phone,
+          website = excluded.website,
+          description = excluded.description,
+          citations = excluded.citations,
+          confidence_level = excluded.confidence_level,
+          last_verified_date = excluded.last_verified_date,
+          record_status = excluded.record_status,
+          updated_at = CURRENT_TIMESTAMP`);
       for (const s of sites) {
         insSite.run({
           site_id: s.site_id,

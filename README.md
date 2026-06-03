@@ -111,7 +111,9 @@ If you receive an updated `us_missile_range_data.xlsx`:
    ```
 4. Start the app again with `start.bat`.
 
-The import script automatically backs up the current `data/app.db` into `/backups/` before replacing its contents.
+The import script automatically backs up the current `data/app.db` into `/backups/` before any writes.
+
+**Re-imports never erase your comments, tasks, or contacts.** The script upserts the imported reference data (sites, radars, activities, sources, imported public contacts) without ever issuing a `DELETE FROM sites`, so the user-data tables (`site_activities`, `site_contacts`, etc.) that reference `sites.site_id` are not cascade-deleted. If you really want a clean reload, stop the app, delete `data/app.db`, and run `npm run db:import` again — the fresh database is rebuilt from scratch.
 
 ## SQLite tables
 
