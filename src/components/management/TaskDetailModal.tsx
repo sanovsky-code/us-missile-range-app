@@ -18,8 +18,8 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { Loader2, X, ExternalLink, History, Calendar, User, Building2, CheckCircle2, AlertCircle } from "lucide-react";
-import type { SiteTimelineActivity, TaskStatus } from "@/lib/types";
-import { TASK_STATUSES } from "@/lib/types";
+import type { SiteTimelineActivity, TaskStatus, TaskPriority } from "@/lib/types";
+import { TASK_STATUSES, TASK_PRIORITIES } from "@/lib/types";
 
 const STATUS_HEBREW: Record<TaskStatus, string> = {
   "Open": "פתוח",
@@ -89,14 +89,24 @@ export default function TaskDetailModal({
     return () => window.removeEventListener("keydown", onKey);
   }, [onClose]);
 
-  const changeStatus = async (newStatus: TaskStatus) => {
+  /** Generic field-level PATCH. Used for status, priority, due_date, and
+   * assigned_to. Empty-string due_date / assigned_to are normalized to
+   * null so the column can be cleared from the UI. */
+  const patchField = async (
+    patch: Partial<{
+      status: TaskStatus;
+      priority: TaskPriority;
+      due_date: string | null;
+      assigned_to: string | null;
+    }>,
+  ) => {
     setUpdating(true);
     setError(null);
     try {
       const res = await fetch(`/api/activities/${activityId}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ status: newStatus }),
+        body: JSON.stringify(patch),
       });
       if (!res.ok) {
         const j = await res.json().catch(() => ({}));
@@ -109,6 +119,19 @@ export default function TaskDetailModal({
     } finally {
       setUpdating(false);
     }
+  };
+
+  // assigned_to is a free-text field — we draft it locally and commit on
+  // blur or Enter so the user can type freely without firing a PATCH on
+  // every keystroke. Escape reverts to the saved value.
+  const [assignedDraft, setAssignedDraft] = useState<string>("");
+  useEffect(() => { setAssignedDraft(data?.activity.assigned_to ?? ""); }, [data]);
+
+  const commitAssigned = () => {
+    const normalized = assignedDraft.trim();
+    const current = (data?.activity.assigned_to ?? "").trim();
+    if (normalized === current) return;
+    patchField({ assigned_to: normalized || null });
   };
 
   const task = data?.activity;
@@ -172,14 +195,16 @@ export default function TaskDetailModal({
             </div>
           ) : task ? (
             <>
-              {/* Metadata grid */}
+              {/* Metadata grid — every field except "נוצר על־ידי" and
+                 "הושלם" is inline-editable. Saves fire on change for
+                 selects/date inputs and on blur/Enter for the text input. */}
               <section className="grid grid-cols-2 gap-3 text-sm">
                 <Field icon={<History className="w-3.5 h-3.5" />} label="סטטוס">
                   <div className="flex items-center gap-2">
                     <select
                       value={task.status ?? "Open"}
                       disabled={updating}
-                      onChange={(e) => changeStatus(e.target.value as TaskStatus)}
+                      onChange={(e) => patchField({ status: e.target.value as TaskStatus })}
                       className={
                         "text-xs px-2 py-1 rounded-md border " +
                         (STATUS_CLS[task.status as TaskStatus] ?? "bg-gray-50 border-gray-200") +
@@ -193,15 +218,65 @@ export default function TaskDetailModal({
                     {updating && <Loader2 className="w-3.5 h-3.5 animate-spin text-gray-400" />}
                   </div>
                 </Field>
+
                 <Field icon={<AlertCircle className="w-3.5 h-3.5" />} label="עדיפות">
-                  {task.priority ? (PRIORITY_HEBREW[task.priority] ?? task.priority) : "—"}
+                  <select
+                    value={task.priority ?? "Medium"}
+                    disabled={updating}
+                    onChange={(e) => patchField({ priority: e.target.value as TaskPriority })}
+                    className={
+                      "text-xs px-2 py-1 rounded-md border bg-white" +
+                      (updating ? " opacity-50 cursor-wait" : " cursor-pointer")
+                    }
+                  >
+                    {TASK_PRIORITIES.map((p) => (
+                      <option key={p} value={p}>{PRIORITY_HEBREW[p] ?? p}</option>
+                    ))}
+                  </select>
                 </Field>
+
                 <Field icon={<Calendar className="w-3.5 h-3.5" />} label="יעד">
-                  {task.due_date ? formatDate(task.due_date) : "—"}
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="date"
+                      value={normalizeDateForInput(task.due_date)}
+                      disabled={updating}
+                      onChange={(e) => patchField({ due_date: e.target.value || null })}
+                      className="text-xs px-2 py-1 rounded-md border border-gray-200 bg-white"
+                      dir="ltr"
+                    />
+                    {task.due_date && !updating && (
+                      <button
+                        type="button"
+                        onClick={() => patchField({ due_date: null })}
+                        className="text-xs text-gray-500 hover:text-red-600"
+                        title="נקה תאריך יעד"
+                      >
+                        נקה
+                      </button>
+                    )}
+                  </div>
                 </Field>
+
                 <Field icon={<User className="w-3.5 h-3.5" />} label="משויך">
-                  {task.assigned_to ?? "—"}
+                  <input
+                    type="text"
+                    value={assignedDraft}
+                    disabled={updating}
+                    onChange={(e) => setAssignedDraft(e.target.value)}
+                    onBlur={commitAssigned}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") (e.target as HTMLInputElement).blur();
+                      if (e.key === "Escape") {
+                        setAssignedDraft(task.assigned_to ?? "");
+                        (e.target as HTMLInputElement).blur();
+                      }
+                    }}
+                    placeholder="—"
+                    className="text-xs px-2 py-1 rounded-md border border-gray-200 bg-white w-full"
+                  />
                 </Field>
+
                 <Field icon={<User className="w-3.5 h-3.5" />} label="נוצר על־ידי">
                   <span>
                     {task.created_by ?? "—"}
@@ -293,10 +368,20 @@ function Field({ icon, label, children }: { icon: React.ReactNode; label: string
   );
 }
 
-function formatDate(iso: string): string {
-  try {
-    return new Date(iso).toLocaleDateString("he-IL", { year: "numeric", month: "2-digit", day: "2-digit" });
-  } catch { return iso; }
+/** Convert whatever the DB stored (YYYY-MM-DD or an ISO timestamp) into
+ * the YYYY-MM-DD form an <input type="date"> requires. Empty string when
+ * the field is unset, so React keeps the input controlled. */
+function normalizeDateForInput(iso?: string): string {
+  if (!iso) return "";
+  // Already YYYY-MM-DD? leave alone.
+  if (/^\d{4}-\d{2}-\d{2}$/.test(iso)) return iso;
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return "";
+  // Use local timezone components so the picker shows the user-meaningful day.
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
 }
 
 function formatDateTime(iso?: string): string {
