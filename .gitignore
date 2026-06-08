@@ -70,3 +70,7 @@ __pycache__/
 /data/*Copy*.xlsx
 /data/*Backup*.xlsx
 /data/notebook-responses/
+
+# Distribution build artifacts (produced by `npm run build:dist`)
+/dist/
+/vendor/
