@@ -58,3 +58,15 @@ __pycache__/
 !/files/documents/.gitkeep
 !/files/images/.gitkeep
 !/files/exports/.gitkeep
+
+# Controlled-import wizard transient files (we ship empty bucket dirs)
+/imports/*
+!/imports/.gitkeep
+!/imports/previews/
+/imports/previews/*
+!/imports/previews/.gitkeep
+
+# Operator-only working copies that sit next to the canonical Excel
+/data/*Copy*.xlsx
+/data/*Backup*.xlsx
+/data/notebook-responses/

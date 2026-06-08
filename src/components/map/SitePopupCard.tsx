@@ -2,6 +2,7 @@ import Link from "next/link";
 import { SiteListItem } from "@/lib/types";
 import { SIZE_CATEGORY_COLORS } from "@/lib/constants";
 import { MapPin, Radio, Activity, ExternalLink } from "lucide-react";
+import FavoriteButton from "@/components/site-profile/FavoriteButton";
 
 const sizeHebrew: Record<string, string> = {
   Small: "קטן",
@@ -16,15 +17,22 @@ export default function SitePopupCard({ site }: { site: SiteListItem }) {
   return (
     <div className="min-w-[280px] max-w-[320px]" dir="rtl">
       <div className="flex items-start justify-between gap-2 mb-2">
-        <h3 className="font-bold text-sm leading-tight text-left" dir="ltr">
+        <h3 className="font-bold text-sm leading-tight text-left flex-1 min-w-0" dir="ltr">
           {site.site_name}
         </h3>
-        <span
-          className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold text-white whitespace-nowrap"
-          style={{ backgroundColor: sizeColor }}
-        >
-          {sizeHebrew[site.size_category] || site.size_category}
-        </span>
+        <div className="flex items-center gap-1 flex-shrink-0">
+          <FavoriteButton
+            siteId={site.site_id}
+            initialIsFavorite={site.is_favorite}
+            variant="icon"
+          />
+          <span
+            className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold text-white whitespace-nowrap"
+            style={{ backgroundColor: sizeColor }}
+          >
+            {sizeHebrew[site.size_category] || site.size_category}
+          </span>
+        </div>
       </div>
 
       <div className="flex items-center gap-2 text-xs text-gray-600 mb-2">

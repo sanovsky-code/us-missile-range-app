@@ -27,9 +27,10 @@ export interface Site {
   updated_by?: string;
   updated_date?: string;
   radars?: Radar[];
-  activities?: SiteActivity[];
+  activities?: SiteRangeActivity[];
   contacts?: Contact[];
   sources?: Source[];
+  is_favorite?: boolean;
 }
 
 export interface SiteListItem {
@@ -49,6 +50,31 @@ export interface SiteListItem {
   activity_count: number;
   radar_count: number;
   specializations: string[];
+  /** True when the site has a row in site_favorites. Populated by
+   * getAllSites() so list/map views can show a filled star without a
+   * second query per row. */
+  is_favorite: boolean;
+}
+
+/** One row of the site_favorites table (Salesforce-style favorite pointer,
+ * not a copy of the Site itself). */
+export interface SiteFavorite {
+  id: number;
+  site_id: string;
+  created_by?: string;
+  created_at: string;
+  sort_order?: number;
+  notes?: string;
+}
+
+/** Joined favorite row + the Site columns the /favorites page needs to
+ * render without a second round-trip. */
+export interface FavoriteSiteListItem extends SiteListItem {
+  favorite_created_at: string;
+  favorite_notes?: string;
+  description: string;
+  last_verified_date: string;
+  open_task_count: number;
 }
 
 export interface Radar {
@@ -74,7 +100,15 @@ export interface Radar {
   record_status: string;
 }
 
-export interface SiteActivity {
+/**
+ * Operational / domain activity (missile tests, space launches, historical
+ * activity windows) imported from the Excel "Site_Activities" sheet into
+ * the `site_range_activities` table.
+ *
+ * NOT to be confused with SiteTimelineActivity (Salesforce-style user
+ * timeline comments / tasks / task updates) defined further down.
+ */
+export interface SiteRangeActivity {
   activity_id: string;
   site_id: string;
   activity_category: string;
@@ -126,7 +160,7 @@ export interface ImportResult {
   success: boolean;
   sites: Site[];
   radars: Radar[];
-  activities: SiteActivity[];
+  activities: SiteRangeActivity[];
   contacts: Contact[];
   sources: Source[];
   errors: ValidationError[];

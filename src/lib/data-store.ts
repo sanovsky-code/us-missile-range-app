@@ -14,7 +14,7 @@ import path from "path";
 import {
   Site,
   Radar,
-  SiteActivity,
+  SiteRangeActivity,
   Source,
   Contact,
   SiteListItem,
@@ -29,6 +29,7 @@ import {
   TASK_STATUSES,
   TASK_PRIORITIES,
   SiteContact,
+  FavoriteSiteListItem,
 } from "./types";
 import { getDb, getDbPath, transaction } from "./db";
 
@@ -92,7 +93,7 @@ function rowToRadar(row: Record<string, unknown>): Radar {
   };
 }
 
-function rowToActivity(row: Record<string, unknown>): SiteActivity {
+function rowToRangeActivity(row: Record<string, unknown>): SiteRangeActivity {
   return {
     activity_id: String(row.activity_id ?? ""),
     site_id: String(row.site_id ?? ""),
@@ -137,7 +138,7 @@ function rowToContact(row: Record<string, unknown>): Contact {
 }
 
 
-function computeSpecializations(site: Site, radars: Radar[], activities: SiteActivity[]): string[] {
+function computeSpecializations(site: Site, radars: Radar[], activities: SiteRangeActivity[]): string[] {
   const out: string[] = [];
   const cats = new Set(activities.map((a) => a.activity_category));
   const text = [
@@ -195,7 +196,7 @@ class DataStore {
    *
    * IMPORTANT: never DELETE FROM sites or use INSERT OR REPLACE on sites.
    * sites.site_id has ON DELETE CASCADE from every user-data table
-   * (site_activities, site_contacts, site_comments, site_tasks), so any
+   * (site_timeline_activities, site_contacts, site_comments, site_tasks), so any
    * delete-and-reinsert pattern would silently wipe customer comments,
    * tasks, and contacts. We use an ON CONFLICT DO UPDATE upsert on sites
    * (a true UPDATE — no DELETE fires) to preserve those rows.
@@ -205,13 +206,13 @@ class DataStore {
    * which is fine because nothing cascades from them.
    */
   loadFromImport(
-    sites: Site[], radars: Radar[], activities: SiteActivity[],
+    sites: Site[], radars: Radar[], activities: SiteRangeActivity[],
     sources: Source[], contacts: Contact[],
   ): void {
     transaction((db) => {
       // Wipe operational reference tables. None of these are FK targets of
       // user-data tables, so this is safe.
-      db.exec("DELETE FROM contacts; DELETE FROM activities; DELETE FROM radars; DELETE FROM sources;");
+      db.exec("DELETE FROM contacts; DELETE FROM site_range_activities; DELETE FROM radars; DELETE FROM sources;");
 
       const insSource = db.prepare(`INSERT OR REPLACE INTO sources (
         source_id, source_title, source_url, source_type, publisher,
@@ -235,7 +236,7 @@ class DataStore {
 
       // UPSERT (true UPDATE on conflict) so existing sites are updated in
       // place instead of delete-then-inserted. This is what preserves any
-      // site_activities / site_contacts / site_comments / site_tasks rows
+      // site_timeline_activities / site_contacts / site_comments / site_tasks rows
       // attached to a site that's being re-imported.
       const insSite = db.prepare(`INSERT INTO sites (
         site_id, site_name, site_type, size_category, size_score, country, state,
@@ -337,11 +338,22 @@ class DataStore {
         });
       }
 
-      const insAct = db.prepare(`INSERT OR REPLACE INTO activities (
+      const insAct = db.prepare(`INSERT INTO site_range_activities (
         activity_id, site_id, activity_category, activity_description,
         missile_or_system_type, start_year, end_year, status, source_id, confidence_level
       ) VALUES (@activity_id, @site_id, @activity_category, @activity_description,
-                @missile_or_system_type, @start_year, @end_year, @status, @source_id, @confidence_level)`);
+                @missile_or_system_type, @start_year, @end_year, @status, @source_id, @confidence_level)
+        ON CONFLICT(activity_id) DO UPDATE SET
+          site_id = excluded.site_id,
+          activity_category = excluded.activity_category,
+          activity_description = excluded.activity_description,
+          missile_or_system_type = excluded.missile_or_system_type,
+          start_year = excluded.start_year,
+          end_year = excluded.end_year,
+          status = excluded.status,
+          source_id = excluded.source_id,
+          confidence_level = excluded.confidence_level,
+          updated_at = CURRENT_TIMESTAMP`);
       for (const a of activities) {
         if (!validSiteIds.has(a.site_id)) continue;
         insAct.run({
@@ -422,7 +434,7 @@ class DataStore {
       addIn("confidence_level", filters.confidenceLevels, "cl");
       if (filters.activityTypes && filters.activityTypes.length > 0) {
         const placeholders = filters.activityTypes.map((_, i) => `@at${i}`).join(",");
-        where.push(`site_id IN (SELECT site_id FROM activities WHERE activity_category IN (${placeholders}))`);
+        where.push(`site_id IN (SELECT site_id FROM site_range_activities WHERE activity_category IN (${placeholders}))`);
         filters.activityTypes.forEach((v, i) => { params[`at${i}`] = v; });
       }
     }
@@ -436,17 +448,19 @@ class DataStore {
         confidence_level, record_status,
         description, missile_relevance, launch_relevance, radar_relevance,
         (SELECT COUNT(*) FROM radars WHERE radars.site_id = sites.site_id) AS radar_count,
-        (SELECT COUNT(*) FROM activities WHERE activities.site_id = sites.site_id) AS activity_count
+        (SELECT COUNT(*) FROM site_range_activities WHERE site_range_activities.site_id = sites.site_id) AS activity_count
       FROM sites
       WHERE ${where.join(" AND ")}
       ORDER BY site_name
     `;
     const rows = db.prepare(sql).all(params) as Record<string, unknown>[];
 
-    // Bulk-fetch radars and activities for ALL matching sites in two queries
-    // (instead of N+N per-site lookups inside the map below).
+    // Bulk-fetch radars, activities, and favorite flags for ALL matching
+    // sites in three queries (instead of N+N+N per-site lookups inside the
+    // map below).
     const radarsBySite = new Map<string, Radar[]>();
-    const activitiesBySite = new Map<string, SiteActivity[]>();
+    const activitiesBySite = new Map<string, SiteRangeActivity[]>();
+    const favoriteSiteIds = new Set<string>();
     if (rows.length > 0) {
       const siteIds = rows.map((r) => String(r.site_id));
       const placeholders = siteIds.map(() => "?").join(",");
@@ -462,14 +476,19 @@ class DataStore {
       }
 
       const actRows = db.prepare(
-        `SELECT * FROM activities WHERE site_id IN (${placeholders})`
+        `SELECT * FROM site_range_activities WHERE site_id IN (${placeholders})`
       ).all(...siteIds) as Record<string, unknown>[];
       for (const a of actRows) {
         const sid = String(a.site_id);
         const list = activitiesBySite.get(sid) ?? [];
-        list.push(rowToActivity(a));
+        list.push(rowToRangeActivity(a));
         activitiesBySite.set(sid, list);
       }
+
+      const favRows = db.prepare(
+        `SELECT site_id FROM site_favorites WHERE site_id IN (${placeholders})`
+      ).all(...siteIds) as { site_id: string }[];
+      for (const f of favRows) favoriteSiteIds.add(f.site_id);
     }
 
     let items: SiteListItem[] = rows.map((r) => {
@@ -495,6 +514,7 @@ class DataStore {
         activity_count: Number(r.activity_count ?? 0),
         radar_count: Number(r.radar_count ?? 0),
         specializations,
+        is_favorite: favoriteSiteIds.has(siteId),
       };
     });
 
@@ -517,6 +537,7 @@ class DataStore {
     site.activities = this.getActivitiesBySite(siteId);
     site.contacts = this.getContactsBySite(siteId);
     site.sources = this.getSourcesForSite(siteId);
+    site.is_favorite = this.isSiteFavorite(siteId);
     return site;
   }
 
@@ -525,9 +546,9 @@ class DataStore {
     return rows.map(rowToRadar);
   }
 
-  private getActivitiesBySite(siteId: string): SiteActivity[] {
-    const rows = getDb().prepare("SELECT * FROM activities WHERE site_id = ?").all(siteId) as Record<string, unknown>[];
-    return rows.map(rowToActivity);
+  private getActivitiesBySite(siteId: string): SiteRangeActivity[] {
+    const rows = getDb().prepare("SELECT * FROM site_range_activities WHERE site_id = ?").all(siteId) as Record<string, unknown>[];
+    return rows.map(rowToRangeActivity);
   }
 
   private getContactsBySite(siteId: string): Contact[] {
@@ -554,7 +575,7 @@ class DataStore {
         }
       }
     }
-    const actRows = db.prepare("SELECT source_id FROM activities WHERE site_id = ?").all(siteId) as { source_id?: string }[];
+    const actRows = db.prepare("SELECT source_id FROM site_range_activities WHERE site_id = ?").all(siteId) as { source_id?: string }[];
     for (const a of actRows) if (a.source_id) ids.add(a.source_id);
     const conRows = db.prepare("SELECT source_id FROM contacts WHERE site_id = ?").all(siteId) as { source_id?: string }[];
     for (const c of conRows) if (c.source_id) ids.add(c.source_id);
@@ -587,7 +608,7 @@ class DataStore {
     radars.forEach((r) => ids.add(r.site_id));
 
     const acts = db.prepare(
-      "SELECT site_id FROM activities WHERE source_id = ?"
+      "SELECT site_id FROM site_range_activities WHERE source_id = ?"
     ).all(sourceId) as { site_id: string }[];
     acts.forEach((a) => ids.add(a.site_id));
 
@@ -610,7 +631,7 @@ class DataStore {
         .all() as { v: string }[])
         .map((r) => r.v);
     const activityCats = (db.prepare(
-      `SELECT DISTINCT activity_category AS v FROM activities WHERE activity_category IS NOT NULL ORDER BY activity_category`
+      `SELECT DISTINCT activity_category AS v FROM site_range_activities WHERE activity_category IS NOT NULL ORDER BY activity_category`
     ).all() as { v: string }[]).map((r) => r.v);
 
     return {
@@ -626,12 +647,12 @@ class DataStore {
 
 
   /** Return every row across each table (for export). */
-  getAll(): { sites: Site[]; radars: Radar[]; activities: SiteActivity[]; sources: Source[]; contacts: Contact[] } {
+  getAll(): { sites: Site[]; radars: Radar[]; activities: SiteRangeActivity[]; sources: Source[]; contacts: Contact[] } {
     const db = getDb();
     return {
       sites: (db.prepare("SELECT * FROM sites ORDER BY site_id").all() as Record<string, unknown>[]).map(rowToSite),
       radars: (db.prepare("SELECT * FROM radars ORDER BY radar_id").all() as Record<string, unknown>[]).map(rowToRadar),
-      activities: (db.prepare("SELECT * FROM activities ORDER BY activity_id").all() as Record<string, unknown>[]).map(rowToActivity),
+      activities: (db.prepare("SELECT * FROM site_range_activities ORDER BY activity_id").all() as Record<string, unknown>[]).map(rowToRangeActivity),
       sources: (db.prepare("SELECT * FROM sources ORDER BY source_id").all() as Record<string, unknown>[]).map(rowToSource),
       contacts: (db.prepare("SELECT * FROM contacts ORDER BY contact_id").all() as Record<string, unknown>[]).map(rowToContact),
     };
@@ -640,7 +661,7 @@ class DataStore {
 
   // --- Activity Timeline --------------------------------------------------
   //
-  // The site_activities table holds every user action on a site (comments,
+  // The site_timeline_activities table holds every user action on a site (comments,
   // tasks, task updates). A status change on a task is persisted in TWO
   // places: the original row's status field is updated, AND a new
   // "Task Update" row is inserted with parent_activity_id pointing at the
@@ -649,19 +670,19 @@ class DataStore {
   listActivitiesForSite(siteId: string, type?: ActivityType): SiteTimelineActivity[] {
     if (type) {
       return getDb()
-        .prepare(`SELECT * FROM site_activities
+        .prepare(`SELECT * FROM site_timeline_activities
                   WHERE site_id = ? AND activity_type = ?
                   ORDER BY datetime(created_at) DESC, id DESC`)
         .all(siteId, type) as SiteTimelineActivity[];
     }
     return getDb()
-      .prepare(`SELECT * FROM site_activities WHERE site_id = ?
+      .prepare(`SELECT * FROM site_timeline_activities WHERE site_id = ?
                 ORDER BY datetime(created_at) DESC, id DESC`)
       .all(siteId) as SiteTimelineActivity[];
   }
 
   getActivityById(id: number): SiteTimelineActivity | null {
-    const row = getDb().prepare("SELECT * FROM site_activities WHERE id = ?").get(id);
+    const row = getDb().prepare("SELECT * FROM site_timeline_activities WHERE id = ?").get(id);
     return (row as SiteTimelineActivity | undefined) ?? null;
   }
 
@@ -700,7 +721,7 @@ class DataStore {
     }
 
     const result = getDb().prepare(`
-      INSERT INTO site_activities (
+      INSERT INTO site_timeline_activities (
         site_id, activity_type, subject, body, status, priority, due_date,
         assigned_to, created_by, parent_activity_id
       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -766,12 +787,12 @@ class DataStore {
       if (updates.length === 0) return existing;
       updates.push("updated_at = CURRENT_TIMESTAMP");
       params.push(id);
-      db.prepare(`UPDATE site_activities SET ${updates.join(", ")} WHERE id = ?`).run(...params);
+      db.prepare(`UPDATE site_timeline_activities SET ${updates.join(", ")} WHERE id = ?`).run(...params);
 
       // Insert the Task Update history row.
       if (statusChanged) {
         db.prepare(`
-          INSERT INTO site_activities (
+          INSERT INTO site_timeline_activities (
             site_id, activity_type, subject, body, parent_activity_id, created_by
           ) VALUES (?, 'Task Update', ?, ?, ?, ?)
         `).run(
@@ -789,7 +810,7 @@ class DataStore {
 
   deleteActivity(id: number): boolean {
     // ON DELETE CASCADE removes any Task Update children as well.
-    const result = getDb().prepare("DELETE FROM site_activities WHERE id = ?").run(id);
+    const result = getDb().prepare("DELETE FROM site_timeline_activities WHERE id = ?").run(id);
     return result.changes > 0;
   }
 
@@ -822,7 +843,7 @@ class DataStore {
 
     const sql = `
       SELECT a.*, s.site_name AS site_name, s.country AS country
-      FROM site_activities a
+      FROM site_timeline_activities a
       JOIN sites s ON s.site_id = a.site_id
       WHERE ${where.join(" AND ")}
       ORDER BY
@@ -923,6 +944,94 @@ class DataStore {
     const result = getDb().prepare("DELETE FROM site_contacts WHERE id = ?").run(id);
     return result.changes > 0;
   }
+
+
+  // --- Favorites ----------------------------------------------------------
+  //
+  // site_favorites stores nothing about the Site itself; it only points at
+  // sites.site_id via FK. Both add/remove are idempotent (UNIQUE(site_id) +
+  // INSERT OR IGNORE / DELETE ... WHERE site_id = ?).
+
+  isSiteFavorite(siteId: string): boolean {
+    const row = getDb().prepare("SELECT 1 AS v FROM site_favorites WHERE site_id = ?").get(siteId);
+    return !!row;
+  }
+
+  /** Add a site to favorites. Safe to call repeatedly — UNIQUE(site_id)
+   * keeps the row count at one. Returns true if a new row was inserted. */
+  addSiteFavorite(siteId: string, opts?: { created_by?: string; notes?: string }): boolean {
+    const siteExists = getDb().prepare("SELECT 1 FROM sites WHERE site_id = ?").get(siteId);
+    if (!siteExists) throw new Error(`Site "${siteId}" not found`);
+    const result = getDb().prepare(`
+      INSERT OR IGNORE INTO site_favorites (site_id, created_by, notes)
+      VALUES (?, ?, ?)
+    `).run(siteId, opts?.created_by ?? null, opts?.notes ?? null);
+    return result.changes > 0;
+  }
+
+  /** Remove a site from favorites. Idempotent; returns true if a row was
+   * deleted, false if it wasn't a favorite. */
+  removeSiteFavorite(siteId: string): boolean {
+    const result = getDb().prepare("DELETE FROM site_favorites WHERE site_id = ?").run(siteId);
+    return result.changes > 0;
+  }
+
+  /** Joined list for the /favorites page. One query — joins site_favorites
+   * onto sites and counts open tasks on site_timeline_activities. Filters
+   * out Archived sites the same way getAllSites does. */
+  listFavoriteSites(): FavoriteSiteListItem[] {
+    const rows = getDb().prepare(`
+      SELECT
+        s.site_id, s.site_name, s.site_type, s.size_category, s.country, s.state,
+        s.latitude, s.longitude, s.coordinate_type, s.operator, s.managing_organization,
+        s.confidence_level, s.record_status, s.description, s.last_verified_date,
+        s.missile_relevance, s.launch_relevance, s.radar_relevance,
+        f.created_at AS favorite_created_at, f.notes AS favorite_notes,
+        (SELECT COUNT(*) FROM radars             WHERE radars.site_id             = s.site_id) AS radar_count,
+        (SELECT COUNT(*) FROM site_range_activities WHERE site_range_activities.site_id = s.site_id) AS activity_count,
+        (SELECT COUNT(*) FROM site_timeline_activities a
+                            WHERE a.site_id = s.site_id
+                              AND a.activity_type = 'Task'
+                              AND a.status IN ('Open', 'In Progress')) AS open_task_count
+      FROM site_favorites f
+      JOIN sites s ON s.site_id = f.site_id
+      WHERE s.record_status != 'Archived'
+      ORDER BY datetime(f.created_at) DESC, s.site_name
+    `).all() as Array<Record<string, unknown>>;
+
+    return rows.map((r) => {
+      const site = rowToSite(r);
+      // computeSpecializations needs radars and activities; we don't pull
+      // them on this page, so fall back to a content-only pass over the
+      // site text fields.
+      const specializations = computeSpecializations(site, [], []);
+      return {
+        site_id: site.site_id,
+        site_name: site.site_name,
+        site_type: site.site_type,
+        size_category: site.size_category,
+        country: site.country,
+        state: site.state,
+        latitude: site.latitude,
+        longitude: site.longitude,
+        coordinate_type: site.coordinate_type || "Site centroid",
+        operator: site.operator,
+        managing_organization: site.managing_organization,
+        confidence_level: site.confidence_level,
+        record_status: site.record_status,
+        activity_count: Number(r.activity_count ?? 0),
+        radar_count: Number(r.radar_count ?? 0),
+        specializations,
+        is_favorite: true,
+        description: site.description,
+        last_verified_date: site.last_verified_date,
+        favorite_created_at: String(r.favorite_created_at ?? ""),
+        favorite_notes: toUndef(r.favorite_notes as string | null) ?? undefined,
+        open_task_count: Number(r.open_task_count ?? 0),
+      };
+    });
+  }
+
 
   /** Copy data/app.db to backups/app.db.<timestamp> before destructive operations. */
   backup(): string | null {

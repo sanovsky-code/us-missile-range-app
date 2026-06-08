@@ -1,5 +1,5 @@
 import ExcelJS from "exceljs";
-import { Site, Radar, SiteActivity, Source, Contact } from "./types";
+import { Site, Radar, SiteRangeActivity, Source, Contact } from "./types";
 
 /**
  * Build an .xlsx workbook in memory and return its binary contents.
@@ -8,7 +8,7 @@ import { Site, Radar, SiteActivity, Source, Contact } from "./types";
 export async function buildWorkbook(
   sites: Site[],
   radars: Radar[],
-  activities: SiteActivity[],
+  activities: SiteRangeActivity[],
   sources: Source[],
   contacts: Contact[],
 ): Promise<Buffer> {
@@ -20,7 +20,7 @@ export async function buildWorkbook(
 function buildWorkbookInstance(
   sites: Site[],
   radars: Radar[],
-  activities: SiteActivity[],
+  activities: SiteRangeActivity[],
   sources: Source[],
   contacts: Contact[],
 ): ExcelJS.Workbook {

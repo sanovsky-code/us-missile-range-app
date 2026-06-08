@@ -1,4 +1,4 @@
-import { Site, Radar, SiteActivity, Source, Contact, ValidationError } from "./types";
+import { Site, Radar, SiteRangeActivity, Source, Contact, ValidationError } from "./types";
 import { SITE_TYPES, SIZE_CATEGORIES, CONFIDENCE_LEVELS, RECORD_STATUSES, RADAR_TYPES, OPERATIONAL_STATUSES, ACTIVITY_CATEGORIES } from "./constants";
 
 function err(sheet: string, row: number, field: string, value: string, rule: string, message: string, severity: "error" | "warning" = "error"): ValidationError {
@@ -98,7 +98,7 @@ export function validateRadars(radars: Radar[], siteIds: Set<string>, sourceIds:
   return errors;
 }
 
-export function validateActivities(activities: SiteActivity[], siteIds: Set<string>, sourceIds: Set<string>): ValidationError[] {
+export function validateActivities(activities: SiteRangeActivity[], siteIds: Set<string>, sourceIds: Set<string>): ValidationError[] {
   const errors: ValidationError[] = [];
 
   activities.forEach((act, i) => {

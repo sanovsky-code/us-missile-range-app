@@ -1,5 +1,5 @@
 import ExcelJS from "exceljs";
-import { Site, Radar, SiteActivity, Source, Contact, ImportResult, ValidationError } from "./types";
+import { Site, Radar, SiteRangeActivity, Source, Contact, ImportResult, ValidationError } from "./types";
 import { validateSites, validateRadars, validateActivities, validateSources, validateContacts } from "./validators";
 
 function sanitize(value: unknown): string {
@@ -103,7 +103,7 @@ function parseRadar(r: Record<string, string>): Radar {
   };
 }
 
-function parseActivity(r: Record<string, string>): SiteActivity {
+function parseActivity(r: Record<string, string>): SiteRangeActivity {
   return {
     activity_id: r.activity_id || "",
     site_id: r.site_id || "",

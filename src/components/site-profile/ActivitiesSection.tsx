@@ -1,4 +1,4 @@
-import { SiteActivity } from "@/lib/types";
+import { SiteRangeActivity } from "@/lib/types";
 import Badge, { StatusBadge, ConfidenceBadge } from "@/components/ui/Badge";
 import { Activity } from "lucide-react";
 
@@ -31,7 +31,7 @@ const statusHebrew: Record<string, string> = {
   Unknown: "לא ידוע",
 };
 
-export default function ActivitiesSection({ activities }: { activities: SiteActivity[] }) {
+export default function ActivitiesSection({ activities }: { activities: SiteRangeActivity[] }) {
   if (!activities || activities.length === 0) {
     return (
       <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6">

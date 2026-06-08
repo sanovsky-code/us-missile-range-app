@@ -1,5 +1,6 @@
 import { Site } from "@/lib/types";
 import { SizeBadge, ConfidenceBadge, StatusBadge } from "@/components/ui/Badge";
+import FavoriteButton from "@/components/site-profile/FavoriteButton";
 import { MapPin, Building2, Shield } from "lucide-react";
 
 export default function SiteHeader({ site }: { site: Site }) {
@@ -23,6 +24,7 @@ export default function SiteHeader({ site }: { site: Site }) {
           </div>
         </div>
         <div className="flex items-center gap-2 flex-shrink-0">
+          <FavoriteButton siteId={site.site_id} initialIsFavorite={site.is_favorite ?? false} />
           <SizeBadge sizeCategory={site.size_category} />
           <ConfidenceBadge level={site.confidence_level} />
           <StatusBadge status={site.record_status} />

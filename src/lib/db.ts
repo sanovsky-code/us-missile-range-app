@@ -82,8 +82,13 @@ CREATE INDEX IF NOT EXISTS idx_radars_site ON radars(site_id);
 CREATE INDEX IF NOT EXISTS idx_radars_type ON radars(radar_type);
 CREATE INDEX IF NOT EXISTS idx_radars_status ON radars(operational_status);
 
-CREATE TABLE IF NOT EXISTS activities (
-  activity_id              TEXT PRIMARY KEY,
+-- Operational / domain activities imported from the Excel "Site_Activities"
+-- sheet: missile tests, space launches, historical activity windows, etc.
+-- Distinct from site_timeline_activities below (which is the Salesforce-style
+-- user-facing Comment / Task / Task Update timeline).
+CREATE TABLE IF NOT EXISTS site_range_activities (
+  id                       INTEGER PRIMARY KEY AUTOINCREMENT,
+  activity_id              TEXT UNIQUE,
   site_id                  TEXT NOT NULL,
   activity_category        TEXT,
   activity_description     TEXT,
@@ -93,10 +98,13 @@ CREATE TABLE IF NOT EXISTS activities (
   status                   TEXT,
   source_id                TEXT,
   confidence_level         TEXT,
+  created_at               TEXT DEFAULT CURRENT_TIMESTAMP,
+  updated_at               TEXT,
   FOREIGN KEY (site_id) REFERENCES sites(site_id) ON DELETE CASCADE
 );
-CREATE INDEX IF NOT EXISTS idx_activities_site ON activities(site_id);
-CREATE INDEX IF NOT EXISTS idx_activities_category ON activities(activity_category);
+CREATE INDEX IF NOT EXISTS idx_site_range_activities_site_id ON site_range_activities(site_id);
+CREATE INDEX IF NOT EXISTS idx_site_range_activities_activity_id ON site_range_activities(activity_id);
+CREATE INDEX IF NOT EXISTS idx_site_range_activities_category ON site_range_activities(activity_category);
 
 CREATE TABLE IF NOT EXISTS sources (
   source_id         TEXT PRIMARY KEY,
@@ -146,8 +154,11 @@ CREATE INDEX IF NOT EXISTS idx_files_entity ON files(entity_type, entity_id);
 -- discriminates between them. parent_activity_id links a "Task Update"
 -- back to the original "Task" it describes, so status-change history is
 -- preserved instead of being silently overwritten.
+-- Renamed from the original site_activities to site_timeline_activities
+-- so it is not confused with operational range activities imported from
+-- Excel (which live in site_range_activities).
 -- site_id is TEXT to match sites.site_id (e.g. "SITE-0170").
-CREATE TABLE IF NOT EXISTS site_activities (
+CREATE TABLE IF NOT EXISTS site_timeline_activities (
   id                  INTEGER PRIMARY KEY AUTOINCREMENT,
   site_id             TEXT NOT NULL,
   activity_type       TEXT NOT NULL,
@@ -163,14 +174,14 @@ CREATE TABLE IF NOT EXISTS site_activities (
   completed_at        TEXT,
   parent_activity_id  INTEGER,
   FOREIGN KEY (site_id) REFERENCES sites(site_id) ON DELETE CASCADE,
-  FOREIGN KEY (parent_activity_id) REFERENCES site_activities(id) ON DELETE CASCADE
+  FOREIGN KEY (parent_activity_id) REFERENCES site_timeline_activities(id) ON DELETE CASCADE
 );
-CREATE INDEX IF NOT EXISTS idx_site_activities_site_id ON site_activities(site_id);
-CREATE INDEX IF NOT EXISTS idx_site_activities_type ON site_activities(activity_type);
-CREATE INDEX IF NOT EXISTS idx_site_activities_status ON site_activities(status);
-CREATE INDEX IF NOT EXISTS idx_site_activities_due_date ON site_activities(due_date);
-CREATE INDEX IF NOT EXISTS idx_site_activities_parent ON site_activities(parent_activity_id);
-CREATE INDEX IF NOT EXISTS idx_site_activities_created_at ON site_activities(created_at);
+CREATE INDEX IF NOT EXISTS idx_site_timeline_activities_site_id ON site_timeline_activities(site_id);
+CREATE INDEX IF NOT EXISTS idx_site_timeline_activities_type ON site_timeline_activities(activity_type);
+CREATE INDEX IF NOT EXISTS idx_site_timeline_activities_status ON site_timeline_activities(status);
+CREATE INDEX IF NOT EXISTS idx_site_timeline_activities_due_date ON site_timeline_activities(due_date);
+CREATE INDEX IF NOT EXISTS idx_site_timeline_activities_parent ON site_timeline_activities(parent_activity_id);
+CREATE INDEX IF NOT EXISTS idx_site_timeline_activities_created_at ON site_timeline_activities(created_at);
 
 -- The previous, separate site_comments / site_tasks tables remain defined
 -- so existing customer databases keep working. They are no longer written
@@ -219,11 +230,98 @@ CREATE TABLE IF NOT EXISTS site_contacts (
 CREATE INDEX IF NOT EXISTS idx_site_contacts_site_id ON site_contacts(site_id);
 CREATE INDEX IF NOT EXISTS idx_site_contacts_email ON site_contacts(email);
 
+-- Per-user favorite Sites. Lightweight pointer table; no Site data is
+-- duplicated. The UNIQUE(site_id) constraint keeps "add favorite" idempotent
+-- and is what makes a single site_id appear at most once in the list. The
+-- Excel import paths intentionally do NOT delete from sites (they UPSERT),
+-- so this table survives a re-import without losing rows.
+-- site_id is TEXT to match sites.site_id (e.g. "SITE-0170").
+CREATE TABLE IF NOT EXISTS site_favorites (
+  id           INTEGER PRIMARY KEY AUTOINCREMENT,
+  site_id      TEXT NOT NULL,
+  created_by   TEXT,
+  created_at   TEXT DEFAULT CURRENT_TIMESTAMP,
+  sort_order   INTEGER,
+  notes        TEXT,
+  UNIQUE(site_id),
+  FOREIGN KEY (site_id) REFERENCES sites(site_id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_site_favorites_site_id ON site_favorites(site_id);
+
 -- Tiny key/value table for migrations / app metadata
 CREATE TABLE IF NOT EXISTS app_meta (
   key   TEXT PRIMARY KEY,
   value TEXT NOT NULL
 );
+
+-- Field-level audit trail for the controlled Excel import pipeline.
+-- entity_type ∈ {Site, Radar, SiteRangeActivity, Source, Contact}
+-- action      ∈ {Create, Update, Clear, Skip}
+CREATE TABLE IF NOT EXISTS audit_log (
+  id                INTEGER PRIMARY KEY AUTOINCREMENT,
+  entity_type       TEXT NOT NULL,
+  entity_id         TEXT NOT NULL,
+  action            TEXT NOT NULL,
+  field_name        TEXT,
+  old_value         TEXT,
+  new_value         TEXT,
+  changed_by        TEXT,
+  changed_at        TEXT DEFAULT CURRENT_TIMESTAMP,
+  import_batch_id   TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_audit_log_entity ON audit_log(entity_type, entity_id);
+CREATE INDEX IF NOT EXISTS idx_audit_log_import_batch ON audit_log(import_batch_id);
+
+-- One row per controlled-import run (preview or apply). Records the
+-- backup path so the operator can roll back manually if needed.
+CREATE TABLE IF NOT EXISTS import_batches (
+  id                TEXT PRIMARY KEY,
+  file_name         TEXT,
+  mode              TEXT,
+  status            TEXT,
+  started_at        TEXT DEFAULT CURRENT_TIMESTAMP,
+  completed_at      TEXT,
+  total_rows        INTEGER,
+  created_count     INTEGER,
+  updated_count     INTEGER,
+  skipped_count     INTEGER,
+  error_count       INTEGER,
+  backup_path       TEXT,
+  summary           TEXT
+);
+
+-- Validation errors collected per row during a controlled-import run.
+CREATE TABLE IF NOT EXISTS import_validation_errors (
+  id                INTEGER PRIMARY KEY AUTOINCREMENT,
+  import_batch_id   TEXT NOT NULL,
+  sheet_name        TEXT NOT NULL,
+  row_number        INTEGER,
+  field_name        TEXT,
+  value             TEXT,
+  rule              TEXT,
+  message           TEXT,
+  severity          TEXT,
+  created_at        TEXT DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_import_validation_errors_batch ON import_validation_errors(import_batch_id);
+
+-- Per-batch source-conflict log. One row per Excel source_id where the
+-- existing SQLite source has a different title or url. resolution ∈
+-- {REUSE_EXISTING, CREATE_NEW, UPDATE_EXISTING}. When the resolution is
+-- CREATE_NEW, new_source_id holds the freshly generated SRC-XXXX id.
+CREATE TABLE IF NOT EXISTS import_source_conflicts (
+  id                    INTEGER PRIMARY KEY AUTOINCREMENT,
+  import_batch_id       TEXT NOT NULL,
+  original_source_id    TEXT NOT NULL,
+  existing_source_title TEXT,
+  existing_source_url   TEXT,
+  excel_source_title    TEXT,
+  excel_source_url      TEXT,
+  resolution            TEXT,
+  new_source_id         TEXT,
+  created_at            TEXT DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_import_source_conflicts_batch ON import_source_conflicts(import_batch_id);
 `;
 
 
@@ -269,16 +367,156 @@ export function getDb(): Database.Database {
   }
 
   // Run one-shot migrations. Each migration is keyed by name in app_meta;
-  // running twice is a no-op.
+  // running twice is a no-op. Order matters: the rename runs first so any
+  // legacy rows are copied into the new tables before downstream migrations
+  // try to read from them.
+  try {
+    migrateRenameActivityTables(db);
+  } catch (err) {
+    console.warn("Activity-table rename migration failed:", err);
+  }
   try {
     migrateCommentsAndTasksToActivities(db);
   } catch (err) {
     console.warn("Activity migration failed:", err);
-    // Non-fatal: the app still works with an empty site_activities table.
+  }
+  try {
+    migrateImportBatchesAddSelectiveColumns(db);
+  } catch (err) {
+    console.warn("import_batches column migration failed:", err);
   }
 
   holder.db = db;
   return db;
+}
+
+
+/**
+ * One-shot rename migration.
+ *
+ * Older customer databases have two tables that have since been renamed for
+ * clarity:
+ *   - `site_activities` (Salesforce-style timeline) → site_timeline_activities
+ *   - `activities`      (operational/Excel imports) → site_range_activities
+ *
+ * If those legacy tables still exist, we copy their rows into the new tables
+ * (the new tables are created by SCHEMA_SQL above), then drop the legacy
+ * tables. The new site_range_activities has an extra INTEGER PRIMARY KEY
+ * `id`, so the original `activity_id` becomes a UNIQUE TEXT column.
+ *
+ * Marks itself done in app_meta under `tables_rename_v2`.
+ */
+/**
+ * Idempotent: add `import_type` and the four source counters to
+ * `import_batches` if they aren't there yet. Older customer databases
+ * have the older `mode`-only column set; we keep `mode` for backwards
+ * compatibility with the existing CLI script and add `import_type` for
+ * the selective-wizard flow ("sites" / "radars" / "site_range_activities" /
+ * "contacts").
+ */
+function migrateImportBatchesAddSelectiveColumns(db: Database.Database): void {
+  const cols = db.prepare("PRAGMA table_info(import_batches)").all() as Array<{ name: string }>;
+  const have = new Set(cols.map((c) => c.name));
+  const tryAdd = (col: string, decl: string) => {
+    if (!have.has(col)) {
+      try {
+        db.exec(`ALTER TABLE import_batches ADD COLUMN ${col} ${decl}`);
+      } catch (err) {
+        console.warn(`ALTER TABLE import_batches ADD ${col} failed:`, (err as Error).message);
+      }
+    }
+  };
+  tryAdd("import_type", "TEXT");
+  tryAdd("selected_records_count", "INTEGER");
+  tryAdd("source_created_count", "INTEGER");
+  tryAdd("source_reused_count", "INTEGER");
+  tryAdd("source_conflict_count", "INTEGER");
+}
+
+
+function migrateRenameActivityTables(db: Database.Database): void {
+  const KEY = "tables_rename_v2";
+  const done = db.prepare("SELECT value FROM app_meta WHERE key = ?").get(KEY);
+  if (done) return;
+
+  const txn = db.transaction(() => {
+    const legacyTimeline = db.prepare(
+      "SELECT name FROM sqlite_master WHERE type='table' AND name='site_activities'"
+    ).get();
+    const legacyRange = db.prepare(
+      "SELECT name FROM sqlite_master WHERE type='table' AND name='activities'"
+    ).get();
+
+    let migratedTimeline = 0;
+    let migratedRange = 0;
+
+    if (legacyTimeline) {
+      const alreadyEmpty = (db.prepare(
+        "SELECT COUNT(*) AS n FROM site_timeline_activities"
+      ).get() as { n: number }).n === 0;
+      if (alreadyEmpty) {
+        // Copy ALL columns explicitly (same schema), preserving primary keys
+        // so parent_activity_id references stay intact.
+        db.exec(`
+          INSERT INTO site_timeline_activities
+            (id, site_id, activity_type, subject, body, status, priority,
+             due_date, assigned_to, created_by, created_at, updated_at,
+             completed_at, parent_activity_id)
+          SELECT
+            id, site_id, activity_type, subject, body, status, priority,
+            due_date, assigned_to, created_by, created_at, updated_at,
+            completed_at, parent_activity_id
+          FROM site_activities
+        `);
+        migratedTimeline = (db.prepare(
+          "SELECT COUNT(*) AS n FROM site_timeline_activities"
+        ).get() as { n: number }).n;
+      }
+      // Drop the legacy table. Nothing else FKs to it.
+      db.exec("DROP TABLE site_activities");
+    }
+
+    if (legacyRange) {
+      const alreadyEmpty = (db.prepare(
+        "SELECT COUNT(*) AS n FROM site_range_activities"
+      ).get() as { n: number }).n === 0;
+      if (alreadyEmpty) {
+        db.exec(`
+          INSERT INTO site_range_activities
+            (activity_id, site_id, activity_category, activity_description,
+             missile_or_system_type, start_year, end_year, status, source_id,
+             confidence_level)
+          SELECT
+            activity_id, site_id, activity_category, activity_description,
+            missile_or_system_type, start_year, end_year, status, source_id,
+            confidence_level
+          FROM activities
+        `);
+        migratedRange = (db.prepare(
+          "SELECT COUNT(*) AS n FROM site_range_activities"
+        ).get() as { n: number }).n;
+      }
+      db.exec("DROP TABLE activities");
+    }
+
+    db.prepare("INSERT INTO app_meta (key, value) VALUES (?, ?)").run(
+      KEY,
+      JSON.stringify({
+        at: new Date().toISOString(),
+        migrated_timeline_rows: migratedTimeline,
+        migrated_range_rows: migratedRange,
+      }),
+    );
+
+    if (migratedTimeline > 0 || migratedRange > 0) {
+      console.log(
+        `Renamed activity tables: copied ${migratedTimeline} timeline rows into ` +
+        `site_timeline_activities and ${migratedRange} range rows into site_range_activities.`
+      );
+    }
+  });
+
+  txn();
 }
 
 
@@ -305,7 +543,7 @@ function migrateCommentsAndTasksToActivities(db: Database.Database): void {
 
     if (commentsExist) {
       const insComment = db.prepare(`
-        INSERT INTO site_activities
+        INSERT INTO site_timeline_activities
           (site_id, activity_type, subject, body, created_by, created_at, updated_at)
         VALUES (?, 'Comment', 'Comment added', ?, ?, ?, ?)
       `);
@@ -321,7 +559,7 @@ function migrateCommentsAndTasksToActivities(db: Database.Database): void {
 
     if (tasksExist) {
       const insTask = db.prepare(`
-        INSERT INTO site_activities
+        INSERT INTO site_timeline_activities
           (site_id, activity_type, subject, body, status, priority, due_date,
            created_by, created_at, updated_at, completed_at)
         VALUES (?, 'Task', ?, ?, ?, ?, ?, ?, ?, ?, ?)

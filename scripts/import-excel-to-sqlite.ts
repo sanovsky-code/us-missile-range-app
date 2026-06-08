@@ -167,13 +167,24 @@ function main() {
     `);
 
     const insertActivity = db.prepare(`
-      INSERT OR REPLACE INTO activities (
+      INSERT INTO site_range_activities (
         activity_id, site_id, activity_category, activity_description,
         missile_or_system_type, start_year, end_year, status, source_id, confidence_level
       ) VALUES (
         @activity_id, @site_id, @activity_category, @activity_description,
         @missile_or_system_type, @start_year, @end_year, @status, @source_id, @confidence_level
       )
+      ON CONFLICT(activity_id) DO UPDATE SET
+        site_id = excluded.site_id,
+        activity_category = excluded.activity_category,
+        activity_description = excluded.activity_description,
+        missile_or_system_type = excluded.missile_or_system_type,
+        start_year = excluded.start_year,
+        end_year = excluded.end_year,
+        status = excluded.status,
+        source_id = excluded.source_id,
+        confidence_level = excluded.confidence_level,
+        updated_at = CURRENT_TIMESTAMP
     `);
 
     const insertSource = db.prepare(`
@@ -199,10 +210,10 @@ function main() {
     const runImport = db.transaction(() => {
       // Wipe operational reference tables (no user-data is FK-linked to
       // these, so it's safe). DO NOT delete from `sites` - that would
-      // cascade and erase site_activities / site_contacts /
+      // cascade and erase site_timeline_activities / site_contacts /
       // site_comments / site_tasks. The sites table is updated row-by-
       // row via the ON CONFLICT DO UPDATE upsert defined above.
-      db.exec("DELETE FROM contacts; DELETE FROM activities; DELETE FROM radars; DELETE FROM sources;");
+      db.exec("DELETE FROM contacts; DELETE FROM site_range_activities; DELETE FROM radars; DELETE FROM sources;");
 
       for (const s of sources) {
         insertSource.run({
@@ -337,7 +348,7 @@ function main() {
       SELECT
         (SELECT COUNT(*) FROM sites) AS sites,
         (SELECT COUNT(*) FROM radars) AS radars,
-        (SELECT COUNT(*) FROM activities) AS activities,
+        (SELECT COUNT(*) FROM site_range_activities) AS activities,
         (SELECT COUNT(*) FROM sources) AS sources,
         (SELECT COUNT(*) FROM contacts) AS contacts
     `).get();

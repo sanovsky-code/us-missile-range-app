@@ -2,14 +2,16 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Map, ClipboardList, Crosshair } from "lucide-react";
+import { Map, ClipboardList, Crosshair, Upload, Star } from "lucide-react";
 
 export default function Navbar() {
   const pathname = usePathname();
 
   const links = [
     { href: "/map", label: "תצוגת מפה", icon: Map },
+    { href: "/favorites", label: "מועדפים", icon: Star },
     { href: "/management", label: "Management", icon: ClipboardList },
+    { href: "/import", label: "ייבוא נתונים", icon: Upload },
   ];
 
   return (
