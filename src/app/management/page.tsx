@@ -6,6 +6,7 @@ import { ClipboardList, Loader2, ExternalLink, CheckCircle2 } from "lucide-react
 import {
   SiteTimelineActivityWithSite, TASK_STATUSES, TASK_PRIORITIES, TaskStatus, TaskPriority,
 } from "@/lib/types";
+import TaskDetailModal from "@/components/management/TaskDetailModal";
 
 const STATUS_HEBREW: Record<TaskStatus, string> = {
   "Open": "פתוח",
@@ -48,6 +49,12 @@ export default function ManagementPage() {
   const [statusFilter, setStatusFilter] = useState<TaskStatus | "All">("All");
   const [priorityFilter, setPriorityFilter] = useState<TaskPriority | "All">("All");
   const [siteFilter, setSiteFilter] = useState<string>("All");
+  // Which task is open in the detail modal (null = closed). We keep the
+  // site context alongside the id so the modal can render the site link
+  // without an extra round-trip.
+  const [openTask, setOpenTask] = useState<{
+    id: number; site_id: string; site_name: string; country?: string;
+  } | null>(null);
 
   const reload = useCallback(async () => {
     setLoading(true);
@@ -199,7 +206,14 @@ export default function ManagementPage() {
                 {filtered.map((t) => (
                   <tr key={t.id} className="border-b border-gray-100 hover:bg-gray-50/50">
                     <td className="px-4 py-3">
-                      <p className="font-medium text-gray-900">{t.subject}</p>
+                      <button
+                        type="button"
+                        onClick={() => setOpenTask({ id: t.id, site_id: t.site_id, site_name: t.site_name, country: t.country })}
+                        className="font-medium text-gray-900 hover:text-blue-700 hover:underline text-right"
+                        title="פתח פרטי משימה והיסטוריה"
+                      >
+                        {t.subject}
+                      </button>
                       {t.body && (
                         <p className="text-xs text-gray-500 truncate max-w-md">{t.body}</p>
                       )}
@@ -256,6 +270,17 @@ export default function ManagementPage() {
           )}
         </div>
       </div>
+
+      {openTask && (
+        <TaskDetailModal
+          activityId={openTask.id}
+          siteId={openTask.site_id}
+          siteName={openTask.site_name}
+          country={openTask.country}
+          onClose={() => setOpenTask(null)}
+          onChanged={reload}
+        />
+      )}
     </div>
   );
 }
