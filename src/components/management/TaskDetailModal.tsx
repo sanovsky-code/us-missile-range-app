@@ -17,7 +17,7 @@
  */
 import { useEffect, useState } from "react";
 import Link from "next/link";
-import { Loader2, X, ExternalLink, History, Calendar, User, Building2, CheckCircle2, AlertCircle } from "lucide-react";
+import { Loader2, X, ExternalLink, History, Calendar, User, Building2, CheckCircle2, AlertCircle, Check } from "lucide-react";
 import type { SiteTimelineActivity, TaskStatus, TaskPriority } from "@/lib/types";
 import { TASK_STATUSES, TASK_PRIORITIES } from "@/lib/types";
 
@@ -64,6 +64,9 @@ export default function TaskDetailModal({
   const [loading, setLoading] = useState(true);
   const [updating, setUpdating] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Timestamp of the last successful save. Drives the "✓ נשמר HH:MM"
+  // toast that flashes for ~2s so the operator can see the save landed.
+  const [savedAt, setSavedAt] = useState<Date | null>(null);
 
   const reload = async () => {
     setLoading(true);
@@ -81,13 +84,6 @@ export default function TaskDetailModal({
   };
 
   useEffect(() => { reload(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [activityId]);
-
-  // Close on Escape
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [onClose]);
 
   /** Generic field-level PATCH. Used for status, priority, due_date, and
    * assigned_to. Empty-string due_date / assigned_to are normalized to
@@ -114,12 +110,20 @@ export default function TaskDetailModal({
       }
       await reload();
       onChanged?.();
+      setSavedAt(new Date());
     } catch (e) {
       setError((e as Error).message);
     } finally {
       setUpdating(false);
     }
   };
+
+  // Auto-hide the "✓ נשמר" toast after 2s.
+  useEffect(() => {
+    if (!savedAt) return;
+    const t = setTimeout(() => setSavedAt(null), 2000);
+    return () => clearTimeout(t);
+  }, [savedAt]);
 
   // assigned_to is a free-text field — we draft it locally and commit on
   // blur or Enter so the user can type freely without firing a PATCH on
@@ -134,13 +138,42 @@ export default function TaskDetailModal({
     patchField({ assigned_to: normalized || null });
   };
 
+  /**
+   * Wraps the parent onClose with a "flush draft first" guard. If the
+   * operator typed in משויך and is now closing the modal without first
+   * blurring the input, we still want the save to land — otherwise the
+   * change is silently dropped. We fire-and-forget the PATCH and let the
+   * parent's onChanged() reload the list when it resolves.
+   */
+  const handleClose = () => {
+    const draft = assignedDraft.trim();
+    const current = (data?.activity.assigned_to ?? "").trim();
+    if (data && draft !== current) {
+      fetch(`/api/activities/${activityId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ assigned_to: draft || null }),
+      }).then(() => onChanged?.()).catch(() => { /* swallow — modal is gone */ });
+    }
+    onClose();
+  };
+
+  // Close on Escape, routed through handleClose so any pending draft is
+  // flushed before the modal unmounts.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") handleClose(); };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [onClose, assignedDraft, data]);
+
   const task = data?.activity;
   const history = data?.history ?? [];
 
   return (
     <div
       className="fixed inset-0 z-50 bg-black/40 backdrop-blur-sm flex items-center justify-center p-4"
-      onClick={onClose}
+      onClick={handleClose}
       dir="rtl"
     >
       <div
@@ -169,10 +202,24 @@ export default function TaskDetailModal({
             <h2 className="text-lg font-semibold text-gray-900 break-words" dir="auto">
               {loading ? "טוען..." : (task?.subject ?? "—")}
             </h2>
+            {/* Save-state pill: in-flight spinner OR last-saved confirmation. */}
+            <div className="mt-1 h-5">
+              {updating ? (
+                <span className="inline-flex items-center gap-1 text-xs text-blue-700 bg-blue-50 border border-blue-200 rounded-full px-2 py-0.5">
+                  <Loader2 className="w-3 h-3 animate-spin" />
+                  שומר...
+                </span>
+              ) : savedAt ? (
+                <span className="inline-flex items-center gap-1 text-xs text-green-700 bg-green-50 border border-green-200 rounded-full px-2 py-0.5">
+                  <Check className="w-3 h-3" />
+                  נשמר {savedAt.toLocaleTimeString("he-IL", { hour: "2-digit", minute: "2-digit", second: "2-digit" })}
+                </span>
+              ) : null}
+            </div>
           </div>
           <button
             type="button"
-            onClick={onClose}
+            onClick={handleClose}
             className="text-gray-400 hover:text-gray-700 p-1 rounded-md hover:bg-gray-100"
             aria-label="סגור"
           >
@@ -344,7 +391,7 @@ export default function TaskDetailModal({
           </Link>
           <button
             type="button"
-            onClick={onClose}
+            onClick={handleClose}
             className="px-3 py-1.5 text-xs bg-blue-600 hover:bg-blue-700 text-white rounded-md"
           >
             סגור
