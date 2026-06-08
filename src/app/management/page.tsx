@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
-import { ClipboardList, Loader2, ExternalLink, CheckCircle2 } from "lucide-react";
+import { ClipboardList, Loader2, ExternalLink, CheckCircle2, ArrowUp, ArrowDown, ArrowUpDown } from "lucide-react";
 import {
   SiteTimelineActivityWithSite, TASK_STATUSES, TASK_PRIORITIES, TaskStatus, TaskPriority,
 } from "@/lib/types";
@@ -55,6 +55,19 @@ export default function ManagementPage() {
   const [openTask, setOpenTask] = useState<{
     id: number; site_id: string; site_name: string; country?: string;
   } | null>(null);
+  // Column sort state. null = the API's default order (due-date ascending
+  // with nulls last). Clicking a header cycles: asc → desc → null.
+  type SortKey = "subject" | "site_name" | "priority" | "due_date" | "assigned_to" | "status";
+  type SortDir = "asc" | "desc";
+  const [sort, setSort] = useState<{ key: SortKey; dir: SortDir } | null>(null);
+
+  const toggleSort = (key: SortKey) => {
+    setSort((curr) => {
+      if (!curr || curr.key !== key) return { key, dir: "asc" };
+      if (curr.dir === "asc") return { key, dir: "desc" };
+      return null; // third click clears sort
+    });
+  };
 
   const reload = useCallback(async () => {
     setLoading(true);
@@ -91,8 +104,49 @@ export default function ManagementPage() {
     if (statusFilter !== "All") list = list.filter((t) => t.status === statusFilter);
     if (priorityFilter !== "All") list = list.filter((t) => t.priority === priorityFilter);
     if (siteFilter !== "All") list = list.filter((t) => t.site_id === siteFilter);
-    return list;
-  }, [tasks, statusFilter, priorityFilter, siteFilter]);
+    if (!sort) return list;
+    // Priority and status get domain orderings instead of alphabetical.
+    // Empty/null values always sink to the bottom regardless of direction
+    // so the rows the user is missing data on don't dominate the top.
+    const priorityRank: Record<TaskPriority, number> = { Low: 0, Medium: 1, High: 2 };
+    const statusRank: Record<TaskStatus, number> = { Open: 0, "In Progress": 1, Done: 2, Cancelled: 3 };
+    const compare = (a: SiteTimelineActivityWithSite, b: SiteTimelineActivityWithSite): number => {
+      const dir = sort.dir === "asc" ? 1 : -1;
+      const nullsLast = (av: unknown, bv: unknown): number | null => {
+        const aEmpty = av === null || av === undefined || av === "";
+        const bEmpty = bv === null || bv === undefined || bv === "";
+        if (aEmpty && bEmpty) return 0;
+        if (aEmpty) return 1;
+        if (bEmpty) return -1;
+        return null;
+      };
+      switch (sort.key) {
+        case "subject":     return dir * (a.subject ?? "").localeCompare(b.subject ?? "", "he");
+        case "site_name":   return dir * (a.site_name ?? "").localeCompare(b.site_name ?? "", "he");
+        case "assigned_to": {
+          const ne = nullsLast(a.assigned_to, b.assigned_to);
+          if (ne !== null) return ne;
+          return dir * (a.assigned_to ?? "").localeCompare(b.assigned_to ?? "", "he");
+        }
+        case "due_date": {
+          const ne = nullsLast(a.due_date, b.due_date);
+          if (ne !== null) return ne;
+          return dir * (new Date(a.due_date!).getTime() - new Date(b.due_date!).getTime());
+        }
+        case "priority": {
+          const ne = nullsLast(a.priority, b.priority);
+          if (ne !== null) return ne;
+          return dir * (priorityRank[a.priority as TaskPriority] - priorityRank[b.priority as TaskPriority]);
+        }
+        case "status": {
+          const ne = nullsLast(a.status, b.status);
+          if (ne !== null) return ne;
+          return dir * (statusRank[a.status as TaskStatus] - statusRank[b.status as TaskStatus]);
+        }
+      }
+    };
+    return [...list].sort(compare);
+  }, [tasks, statusFilter, priorityFilter, siteFilter, sort]);
 
   const counts = useMemo(() => {
     const c: Record<TaskStatus, number> = { "Open": 0, "In Progress": 0, "Done": 0, "Cancelled": 0 };
@@ -193,12 +247,12 @@ export default function ManagementPage() {
             <table className="w-full text-sm">
               <thead>
                 <tr className="bg-gray-50 border-b border-gray-200">
-                  <th className="text-right px-4 py-3 text-xs font-bold text-gray-600 uppercase">כותרת</th>
-                  <th className="text-right px-4 py-3 text-xs font-bold text-gray-600 uppercase">אתר</th>
-                  <th className="text-right px-4 py-3 text-xs font-bold text-gray-600 uppercase">עדיפות</th>
-                  <th className="text-right px-4 py-3 text-xs font-bold text-gray-600 uppercase">יעד</th>
-                  <th className="text-right px-4 py-3 text-xs font-bold text-gray-600 uppercase">משויך</th>
-                  <th className="text-right px-4 py-3 text-xs font-bold text-gray-600 uppercase">סטטוס</th>
+                  <SortHeader label="כותרת"   sortKey="subject"     sort={sort} onToggle={toggleSort} />
+                  <SortHeader label="אתר"     sortKey="site_name"   sort={sort} onToggle={toggleSort} />
+                  <SortHeader label="עדיפות"  sortKey="priority"    sort={sort} onToggle={toggleSort} />
+                  <SortHeader label="יעד"     sortKey="due_date"    sort={sort} onToggle={toggleSort} />
+                  <SortHeader label="משויך"   sortKey="assigned_to" sort={sort} onToggle={toggleSort} />
+                  <SortHeader label="סטטוס"   sortKey="status"      sort={sort} onToggle={toggleSort} />
                   <th className="text-right px-4 py-3 text-xs font-bold text-gray-600 uppercase">פעולה</th>
                 </tr>
               </thead>
@@ -282,5 +336,50 @@ export default function ManagementPage() {
         />
       )}
     </div>
+  );
+}
+
+
+/**
+ * Clickable column header. Shows a faded up/down icon by default, and a
+ * filled directional icon when this is the active sort column.
+ *
+ * Click cycle (handled by toggleSort in the parent):
+ *   inactive  → asc
+ *   asc       → desc
+ *   desc      → null (default order)
+ */
+type _SortKey = "subject" | "site_name" | "priority" | "due_date" | "assigned_to" | "status";
+
+function SortHeader({
+  label, sortKey, sort, onToggle,
+}: {
+  label: string;
+  sortKey: _SortKey;
+  sort: { key: _SortKey; dir: "asc" | "desc" } | null;
+  onToggle: (key: _SortKey) => void;
+}) {
+  const active = sort?.key === sortKey;
+  const dir = active ? sort!.dir : null;
+  const Icon = dir === "asc" ? ArrowUp : dir === "desc" ? ArrowDown : ArrowUpDown;
+  return (
+    <th className="text-right px-4 py-3 text-xs font-bold uppercase">
+      <button
+        type="button"
+        onClick={() => onToggle(sortKey)}
+        className={
+          "inline-flex items-center gap-1 select-none " +
+          (active ? "text-blue-700" : "text-gray-600 hover:text-gray-900")
+        }
+        title={
+          dir === "asc" ? `ממוין לפי ${label} — לחיצה להפיכת הסדר`
+          : dir === "desc" ? `ממוין לפי ${label} (יורד) — לחיצה לאיפוס`
+          : `מיון לפי ${label}`
+        }
+      >
+        {label}
+        <Icon className={"w-3.5 h-3.5 " + (active ? "" : "opacity-40")} />
+      </button>
+    </th>
   );
 }
