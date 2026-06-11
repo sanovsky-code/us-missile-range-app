@@ -239,6 +239,8 @@ CREATE INDEX IF NOT EXISTS idx_site_contacts_email ON site_contacts(email);
 CREATE TABLE IF NOT EXISTS crm_contacts (
   id                INTEGER PRIMARY KEY AUTOINCREMENT,
   salutation        TEXT,
+  first_name        TEXT,
+  last_name         TEXT,
   full_name         TEXT NOT NULL,
   title             TEXT,
   organization_name TEXT,
@@ -448,6 +450,11 @@ export function getDb(): Database.Database {
   } catch (err) {
     console.warn("import_batches column migration failed:", err);
   }
+  try {
+    migrateCrmContactsAddSplitNameColumns(db);
+  } catch (err) {
+    console.warn("crm_contacts split-name migration failed:", err);
+  }
 
   holder.db = db;
   return db;
@@ -477,6 +484,51 @@ export function getDb(): Database.Database {
  * the selective-wizard flow ("sites" / "radars" / "site_range_activities" /
  * "contacts").
  */
+/**
+ * Idempotent: add first_name and last_name columns to crm_contacts and
+ * backfill them from full_name on existing rows by splitting on the first
+ * whitespace. full_name stays NOT NULL — first/last are inputs, full_name
+ * is the derived display value.
+ */
+function migrateCrmContactsAddSplitNameColumns(db: Database.Database): void {
+  const cols = db.prepare("PRAGMA table_info(crm_contacts)").all() as Array<{ name: string }>;
+  const have = new Set(cols.map((c) => c.name));
+  const added: string[] = [];
+  for (const c of ["first_name", "last_name"] as const) {
+    if (!have.has(c)) {
+      try {
+        db.exec(`ALTER TABLE crm_contacts ADD COLUMN ${c} TEXT`);
+        added.push(c);
+      } catch (err) {
+        console.warn(`ALTER TABLE crm_contacts ADD ${c} failed:`, (err as Error).message);
+      }
+    }
+  }
+  if (added.length === 0) return;
+  // Backfill: best-effort split of full_name on the FIRST whitespace.
+  // last_name is what Salesforce considers required, so when there is no
+  // space we treat the whole string as last_name. Existing rows that the
+  // operator later corrects via the form will overwrite this.
+  const rows = db.prepare(
+    "SELECT id, full_name FROM crm_contacts WHERE (first_name IS NULL OR first_name = '') AND (last_name IS NULL OR last_name = '')"
+  ).all() as Array<{ id: number; full_name: string }>;
+  const upd = db.prepare("UPDATE crm_contacts SET first_name = ?, last_name = ? WHERE id = ?");
+  for (const r of rows) {
+    const trimmed = (r.full_name ?? "").trim();
+    const idx = trimmed.search(/\s+/);
+    let first = "", last = trimmed;
+    if (idx > 0) {
+      first = trimmed.slice(0, idx).trim();
+      last  = trimmed.slice(idx).trim();
+    }
+    upd.run(first || null, last || null, r.id);
+  }
+  if (rows.length > 0) {
+    console.log(`Backfilled first_name/last_name on ${rows.length} crm_contacts rows.`);
+  }
+}
+
+
 function migrateImportBatchesAddSelectiveColumns(db: Database.Database): void {
   const cols = db.prepare("PRAGMA table_info(import_batches)").all() as Array<{ name: string }>;
   const have = new Set(cols.map((c) => c.name));

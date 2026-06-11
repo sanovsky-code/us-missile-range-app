@@ -51,6 +51,25 @@ function norm(v: string | undefined | null): string | null {
   return s === "" ? null : s;
 }
 
+/** Salesforce-style name composition.
+ *
+ * Priority: explicit `full` wins; otherwise compose from `first` + `last`.
+ * Returns null if neither path produces a non-empty string — the caller
+ * decides whether to treat that as an error (Create requires it; Update
+ * tolerates "no change to name fields"). */
+function deriveFullName(
+  first?: string | null,
+  last?: string | null,
+  full?: string | null,
+): string | null {
+  if (full !== undefined && full !== null) {
+    const f = full.trim();
+    if (f) return f;
+  }
+  const composed = [first, last].map((s) => (s ?? "").trim()).filter(Boolean).join(" ");
+  return composed || null;
+}
+
 function rowToSite(row: Record<string, unknown>): Site {
   return {
     site_id: String(row.site_id ?? ""),
@@ -603,6 +622,14 @@ class DataStore {
     return row ? rowToSource(row) : null;
   }
 
+  /** Lightweight list used by the source lookup. Returns only the columns
+   * the typeahead needs (id, title, type, publisher) to keep payloads small. */
+  listSources(): Array<{ source_id: string; source_title: string; source_type: string; publisher?: string }> {
+    return getDb().prepare(
+      "SELECT source_id, source_title, source_type, publisher FROM sources ORDER BY source_id"
+    ).all() as Array<{ source_id: string; source_title: string; source_type: string; publisher?: string }>;
+  }
+
 
   getSitesCitingSource(sourceId: string): Site[] {
     const db = getDb();
@@ -1071,23 +1098,38 @@ class DataStore {
     return row ?? null;
   }
 
-  createCrmContact(input: Partial<CrmContact> & { full_name: string; created_by?: string }): CrmContact {
-    if (!input.full_name || !input.full_name.trim()) {
-      throw new Error("full_name is required");
+  createCrmContact(input: Partial<CrmContact> & { created_by?: string }): CrmContact {
+    // Salesforce convention: last_name is required; first_name is optional.
+    // If the caller passes an explicit non-empty full_name we honor it (this
+    // path is used by legacy API consumers); otherwise we require last_name
+    // and derive full_name from first + last.
+    let fullName: string;
+    if (input.full_name && input.full_name.trim()) {
+      fullName = input.full_name.trim();
+    } else {
+      if (!input.last_name || !input.last_name.trim()) {
+        throw new Error("last_name is required");
+      }
+      fullName = deriveFullName(input.first_name, input.last_name, undefined)!;
     }
     if (input.site_id) {
       const ok = getDb().prepare("SELECT 1 FROM sites WHERE site_id = ?").get(input.site_id);
       if (!ok) throw new Error(`Site "${input.site_id}" not found`);
     }
+    if (input.source_id) {
+      const ok = getDb().prepare("SELECT 1 FROM sources WHERE source_id = ?").get(input.source_id);
+      if (!ok) throw new Error(`Source "${input.source_id}" not found`);
+    }
     const result = getDb().prepare(`
       INSERT INTO crm_contacts (
-        salutation, full_name, title, organization_name, contact_type,
-        email, phone, mobile, contact_url, department, reports_to, owner,
-        site_id, mailing_address, notes, source_id, created_by
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        salutation, first_name, last_name, full_name, title,
+        organization_name, contact_type, email, phone, mobile,
+        contact_url, department, reports_to, owner, site_id,
+        mailing_address, notes, source_id, created_by
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
-      norm(input.salutation), input.full_name.trim(), norm(input.title),
-      norm(input.organization_name), norm(input.contact_type),
+      norm(input.salutation), norm(input.first_name), norm(input.last_name), fullName,
+      norm(input.title), norm(input.organization_name), norm(input.contact_type),
       norm(input.email), norm(input.phone), norm(input.mobile),
       norm(input.contact_url), norm(input.department), norm(input.reports_to),
       norm(input.owner), norm(input.site_id), norm(input.mailing_address),
@@ -1099,8 +1141,38 @@ class DataStore {
   updateCrmContact(id: number, patch: Partial<CrmContact> & { updated_by?: string }): CrmContact | null {
     const existing = this.getCrmContact(id);
     if (!existing) return null;
+
+    // FK validations
+    if (patch.site_id) {
+      const ok = getDb().prepare("SELECT 1 FROM sites WHERE site_id = ?").get(patch.site_id);
+      if (!ok) throw new Error(`Site "${patch.site_id}" not found`);
+    }
+    if (patch.source_id) {
+      const ok = getDb().prepare("SELECT 1 FROM sources WHERE source_id = ?").get(patch.source_id);
+      if (!ok) throw new Error(`Source "${patch.source_id}" not found`);
+    }
+
+    // If first_name OR last_name changed, re-derive full_name. If the
+    // operator explicitly passes full_name (legacy callers / API), honor
+    // their value instead.
+    let derivedFullName: string | undefined;
+    if (patch.first_name !== undefined || patch.last_name !== undefined) {
+      derivedFullName = deriveFullName(
+        patch.first_name !== undefined ? patch.first_name : existing.first_name,
+        patch.last_name  !== undefined ? patch.last_name  : existing.last_name,
+        undefined,
+      ) ?? undefined;
+      if (!derivedFullName) throw new Error("last_name cannot be empty");
+    }
+    if (patch.full_name !== undefined) {
+      if (!patch.full_name || !patch.full_name.trim()) {
+        throw new Error("full_name cannot be empty");
+      }
+      derivedFullName = patch.full_name.trim();
+    }
+
     const fields: Array<keyof CrmContact> = [
-      "salutation","full_name","title","organization_name","contact_type",
+      "salutation","first_name","last_name","title","organization_name","contact_type",
       "email","phone","mobile","contact_url","department","reports_to","owner",
       "site_id","mailing_address","notes","source_id",
     ];
@@ -1111,12 +1183,9 @@ class DataStore {
       updates.push(`${f} = ?`);
       params.push(norm(patch[f] as string | undefined));
     }
-    if (patch.full_name !== undefined && (!patch.full_name || !patch.full_name.trim())) {
-      throw new Error("full_name cannot be empty");
-    }
-    if (patch.site_id) {
-      const ok = getDb().prepare("SELECT 1 FROM sites WHERE site_id = ?").get(patch.site_id);
-      if (!ok) throw new Error(`Site "${patch.site_id}" not found`);
+    if (derivedFullName !== undefined) {
+      updates.push("full_name = ?");
+      params.push(derivedFullName);
     }
     if (updates.length === 0) return existing;
     updates.push("updated_at = CURRENT_TIMESTAMP");

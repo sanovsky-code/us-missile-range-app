@@ -13,8 +13,10 @@ import { useEffect, useState } from "react";
 import { Loader2, X, AlertCircle } from "lucide-react";
 import type { CrmContact } from "@/lib/types";
 import { CRM_CONTACT_TYPES } from "@/lib/types";
+import LookupField from "@/components/ui/LookupField";
 
-interface SiteOption { site_id: string; site_name: string; }
+interface SiteOption { site_id: string; site_name: string; country?: string; }
+interface SourceOption { source_id: string; source_title: string; source_type?: string; publisher?: string; }
 
 interface Props {
   mode: "create" | "edit";
@@ -27,26 +29,36 @@ const SALUTATIONS = ["", "Mr.", "Mrs.", "Ms.", "Dr.", "Prof."];
 
 export default function ContactFormModal({ mode, initial, onClose, onSaved }: Props) {
   const [form, setForm] = useState<Partial<CrmContact>>(() => ({
-    salutation: "", full_name: "", title: "", organization_name: "",
+    salutation: "", first_name: "", last_name: "", title: "", organization_name: "",
     contact_type: "", email: "", phone: "", mobile: "", contact_url: "",
     department: "", reports_to: "", owner: "", site_id: "",
     mailing_address: "", notes: "", source_id: "",
     ...(initial ?? {}),
   }));
-  const [sites, setSites] = useState<SiteOption[]>([]);
+  // null = loading; [] = loaded-and-empty.
+  const [sites, setSites] = useState<SiteOption[] | null>(null);
+  const [sources, setSources] = useState<SourceOption[] | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // Load Site options for the "אתר משויך" dropdown.
+  // Side-load the lookup option lists. Both are small enough (~hundreds
+  // of rows) to fetch once and filter client-side via LookupField.
   useEffect(() => {
     (async () => {
       try {
         const r = await fetch("/api/sites");
         const j = await r.json();
-        setSites((j.sites ?? []).map((s: { site_id: string; site_name: string }) => ({
-          site_id: s.site_id, site_name: s.site_name,
+        setSites((j.sites ?? []).map((s: { site_id: string; site_name: string; country?: string }) => ({
+          site_id: s.site_id, site_name: s.site_name, country: s.country,
         })));
-      } catch { /* ignore — dropdown just stays empty */ }
+      } catch { setSites([]); }
+    })();
+    (async () => {
+      try {
+        const r = await fetch("/api/sources");
+        const j = await r.json();
+        setSources((j.sources ?? []) as SourceOption[]);
+      } catch { setSources([]); }
     })();
   }, []);
 
@@ -60,15 +72,18 @@ export default function ContactFormModal({ mode, initial, onClose, onSaved }: Pr
     setForm((prev) => ({ ...prev, [k]: v }));
 
   const submit = async () => {
-    if (!form.full_name?.trim()) { setError("שם מלא הוא חובה"); return; }
+    // Salesforce convention: last_name is required, first_name is optional.
+    if (!form.last_name?.trim()) { setError("שם משפחה הוא חובה"); return; }
     setBusy(true); setError(null);
     try {
       const url = mode === "create" ? "/api/crm-contacts" : `/api/crm-contacts/${initial!.id}`;
       const method = mode === "create" ? "POST" : "PATCH";
-      // Strip empty strings — they're normalized server-side to NULL anyway,
-      // and this keeps the payload small.
+      // Strip empty strings — server-side they normalize to NULL anyway,
+      // and this keeps the payload small. Drop the derived `full_name`
+      // field too; the server re-derives it from first/last.
       const payload: Record<string, unknown> = {};
       for (const [k, v] of Object.entries(form)) {
+        if (k === "full_name") continue;
         if (typeof v === "string" && v.trim() === "") continue;
         if (v === undefined || v === null) continue;
         payload[k] = typeof v === "string" ? v.trim() : v;
@@ -114,20 +129,24 @@ export default function ContactFormModal({ mode, initial, onClose, onSaved }: Pr
                   {SALUTATIONS.map((s) => <option key={s} value={s}>{s || "—"}</option>)}
                 </select>
               </Field>
-              <Field label="שם מלא *" required>
-                <input value={form.full_name ?? ""} onChange={(e) => set("full_name", e.target.value)}
-                  className="w-full text-sm px-2 py-1.5 border border-gray-200 rounded" />
-              </Field>
               <Field label="תפקיד / Title">
                 <input value={form.title ?? ""} onChange={(e) => set("title", e.target.value)}
                   className="w-full text-sm px-2 py-1.5 border border-gray-200 rounded" />
               </Field>
-              <Field label="מחלקה">
-                <input value={form.department ?? ""} onChange={(e) => set("department", e.target.value)}
-                  className="w-full text-sm px-2 py-1.5 border border-gray-200 rounded" />
+              <Field label="שם פרטי">
+                <input value={form.first_name ?? ""} onChange={(e) => set("first_name", e.target.value)}
+                  className="w-full text-sm px-2 py-1.5 border border-gray-200 rounded" dir="auto" />
+              </Field>
+              <Field label="שם משפחה *" required>
+                <input value={form.last_name ?? ""} onChange={(e) => set("last_name", e.target.value)}
+                  className="w-full text-sm px-2 py-1.5 border border-gray-200 rounded" dir="auto" />
               </Field>
               <Field label="שם הארגון">
                 <input value={form.organization_name ?? ""} onChange={(e) => set("organization_name", e.target.value)}
+                  className="w-full text-sm px-2 py-1.5 border border-gray-200 rounded" />
+              </Field>
+              <Field label="מחלקה">
+                <input value={form.department ?? ""} onChange={(e) => set("department", e.target.value)}
                   className="w-full text-sm px-2 py-1.5 border border-gray-200 rounded" />
               </Field>
               <Field label="סוג איש קשר">
@@ -137,6 +156,7 @@ export default function ContactFormModal({ mode, initial, onClose, onSaved }: Pr
                   {CRM_CONTACT_TYPES.map((t) => <option key={t} value={t}>{t}</option>)}
                 </select>
               </Field>
+              <div />{/* spacer to keep two-col grid even */}
             </div>
           </section>
 
@@ -166,11 +186,32 @@ export default function ContactFormModal({ mode, initial, onClose, onSaved }: Pr
             <h3 className="text-xs font-semibold text-gray-700 mb-2">שיוך וניהול</h3>
             <div className="grid grid-cols-2 gap-3">
               <Field label="אתר משויך">
-                <select value={form.site_id ?? ""} onChange={(e) => set("site_id", e.target.value)}
-                  className="w-full text-sm px-2 py-1.5 border border-gray-200 rounded">
-                  <option value="">—</option>
-                  {sites.map((s) => <option key={s.site_id} value={s.site_id}>{s.site_name} ({s.site_id})</option>)}
-                </select>
+                <LookupField<SiteOption>
+                  value={form.site_id ?? null}
+                  onChange={(v) => set("site_id", v ?? "")}
+                  options={sites}
+                  getKey={(s) => s.site_id}
+                  filter={(s, q) => {
+                    const ql = q.toLowerCase();
+                    return s.site_id.toLowerCase().includes(ql)
+                      || (s.site_name ?? "").toLowerCase().includes(ql)
+                      || (s.country ?? "").toLowerCase().includes(ql);
+                  }}
+                  renderRow={(s) => (
+                    <div>
+                      <div className="font-medium" dir="ltr">{s.site_name}</div>
+                      <div className="text-xs text-gray-500 font-mono" dir="ltr">
+                        {s.site_id}{s.country ? ` · ${s.country}` : ""}
+                      </div>
+                    </div>
+                  )}
+                  renderChip={(s) => (
+                    <span dir="ltr">
+                      {s.site_name} <span className="text-xs text-gray-500 font-mono">({s.site_id})</span>
+                    </span>
+                  )}
+                  placeholder="חיפוש לפי שם אתר, מזהה או מדינה..."
+                />
               </Field>
               <Field label="אחראי / Owner">
                 <input value={form.owner ?? ""} onChange={(e) => set("owner", e.target.value)}
@@ -180,10 +221,37 @@ export default function ContactFormModal({ mode, initial, onClose, onSaved }: Pr
                 <input value={form.reports_to ?? ""} onChange={(e) => set("reports_to", e.target.value)}
                   className="w-full text-sm px-2 py-1.5 border border-gray-200 rounded" />
               </Field>
-              <Field label="מקור (Source ID)">
-                <input value={form.source_id ?? ""} onChange={(e) => set("source_id", e.target.value)}
-                  className="w-full text-sm px-2 py-1.5 border border-gray-200 rounded" dir="ltr"
-                  placeholder="SRC-XXXX" />
+              <Field label="מקור (Source)">
+                <LookupField<SourceOption>
+                  value={form.source_id ?? null}
+                  onChange={(v) => set("source_id", v ?? "")}
+                  options={sources}
+                  getKey={(s) => s.source_id}
+                  filter={(s, q) => {
+                    const ql = q.toLowerCase();
+                    return s.source_id.toLowerCase().includes(ql)
+                      || (s.source_title ?? "").toLowerCase().includes(ql)
+                      || (s.publisher ?? "").toLowerCase().includes(ql);
+                  }}
+                  renderRow={(s) => (
+                    <div>
+                      <div className="font-mono text-xs text-gray-500" dir="ltr">
+                        {s.source_id}{s.source_type ? ` · ${s.source_type}` : ""}
+                      </div>
+                      <div className="text-sm text-gray-900 truncate" dir="ltr" title={s.source_title}>
+                        {s.source_title}
+                      </div>
+                      {s.publisher && <div className="text-xs text-gray-500 truncate" dir="ltr">{s.publisher}</div>}
+                    </div>
+                  )}
+                  renderChip={(s) => (
+                    <span>
+                      <span className="font-mono text-xs text-gray-500" dir="ltr">{s.source_id}</span>{" — "}
+                      <span dir="ltr">{s.source_title}</span>
+                    </span>
+                  )}
+                  placeholder="חיפוש לפי SRC-id, כותרת או מפרסם..."
+                />
               </Field>
             </div>
           </section>

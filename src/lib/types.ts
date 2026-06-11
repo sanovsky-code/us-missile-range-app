@@ -252,6 +252,11 @@ export type CrmContactType = (typeof CRM_CONTACT_TYPES)[number];
 export interface CrmContact {
   id: number;
   salutation?: string;
+  first_name?: string;
+  last_name?: string;
+  /** Derived for display: trim(first_name + " " + last_name).
+   * Kept as a column so legacy queries that select it continue to work and
+   * so list views can sort/search without re-deriving on every row. */
   full_name: string;
   title?: string;
   organization_name?: string;
