@@ -295,6 +295,17 @@ CREATE INDEX IF NOT EXISTS idx_contact_timeline_activities_type ON contact_timel
 CREATE INDEX IF NOT EXISTS idx_contact_timeline_activities_parent ON contact_timeline_activities(parent_activity_id);
 CREATE INDEX IF NOT EXISTS idx_contact_timeline_activities_created_at ON contact_timeline_activities(created_at);
 
+-- Per-country hide list. Sites whose country appears here vanish from
+-- the map, the search autocomplete, the favorites list, and the
+-- Management task feed — but their data and audit history are preserved.
+-- A direct URL to /site/:id still works (so bookmarks don't break) and
+-- the operator can un-hide via the /admin/countries page.
+CREATE TABLE IF NOT EXISTS hidden_countries (
+  country     TEXT PRIMARY KEY,
+  hidden_by   TEXT,
+  hidden_at   TEXT DEFAULT CURRENT_TIMESTAMP
+);
+
 -- Per-user favorite Sites. Lightweight pointer table; no Site data is
 -- duplicated. The UNIQUE(site_id) constraint keeps "add favorite" idempotent
 -- and is what makes a single site_id appear at most once in the list. The
@@ -455,6 +466,11 @@ export function getDb(): Database.Database {
   } catch (err) {
     console.warn("crm_contacts split-name migration failed:", err);
   }
+  try {
+    migrateSitesAddIsHidden(db);
+  } catch (err) {
+    console.warn("sites.is_hidden migration failed:", err);
+  }
 
   holder.db = db;
   return db;
@@ -490,6 +506,21 @@ export function getDb(): Database.Database {
  * whitespace. full_name stays NOT NULL — first/last are inputs, full_name
  * is the derived display value.
  */
+/**
+ * Idempotent: add the is_hidden visibility flag to sites. Distinct from
+ * record_status (workflow state) — is_hidden is a display preference that
+ * removes a site from the map, autocomplete, favorites, and Management
+ * task list without changing its workflow status or losing its history.
+ */
+function migrateSitesAddIsHidden(db: Database.Database): void {
+  const cols = db.prepare("PRAGMA table_info(sites)").all() as Array<{ name: string }>;
+  if (!cols.some((c) => c.name === "is_hidden")) {
+    db.exec("ALTER TABLE sites ADD COLUMN is_hidden INTEGER NOT NULL DEFAULT 0");
+    db.exec("CREATE INDEX IF NOT EXISTS idx_sites_is_hidden ON sites(is_hidden)");
+  }
+}
+
+
 function migrateCrmContactsAddSplitNameColumns(db: Database.Database): void {
   const cols = db.prepare("PRAGMA table_info(crm_contacts)").all() as Array<{ name: string }>;
   const have = new Set(cols.map((c) => c.name));

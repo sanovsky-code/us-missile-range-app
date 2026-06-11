@@ -76,6 +76,7 @@ function rowToSite(row: Record<string, unknown>): Site {
   return {
     site_id: String(row.site_id ?? ""),
     site_name: String(row.site_name ?? ""),
+    is_hidden: Boolean(row.is_hidden),
     site_type: String(row.site_type ?? ""),
     size_category: String(row.size_category ?? ""),
     size_score: toUndef(row.size_score as number | null),
@@ -437,7 +438,17 @@ class DataStore {
   getAllSites(filters?: FilterState): SiteListItem[] {
     const db = getDb();
 
-    const where: string[] = ["record_status != 'Archived'"];
+    // Visibility layer: filter out individually-hidden sites AND sites in
+    // any country listed in hidden_countries. The map, search autocomplete,
+    // sidebar list, and Management feed all flow through here, so this
+    // single WHERE pair drives the entire hide behavior. Direct URL to
+    // /site/:id (via getSiteById) intentionally bypasses this so bookmarks
+    // still work.
+    const where: string[] = [
+      "record_status != 'Archived'",
+      "is_hidden = 0",
+      "country NOT IN (SELECT country FROM hidden_countries)",
+    ];
     const params: Record<string, unknown> = {};
 
     if (filters) {
@@ -919,6 +930,11 @@ class DataStore {
     const allParams: unknown[] = [];
 
     if (includeSite) {
+      // Site task branch — hide tasks whose parent site is hidden (per
+      // sites.is_hidden) or whose parent site's country is hidden (per
+      // hidden_countries). Contact tasks intentionally do NOT have an
+      // equivalent filter: a contact stands on its own and its tasks stay
+      // visible even if its linked site happens to be hidden.
       branches.push(`
         SELECT
           a.id, 'site' AS parent_type, a.site_id AS parent_id,
@@ -929,6 +945,8 @@ class DataStore {
         FROM site_timeline_activities a
         JOIN sites s ON s.site_id = a.site_id
         WHERE ${siteWhere}
+          AND s.is_hidden = 0
+          AND s.country NOT IN (SELECT country FROM hidden_countries)
       `);
       allParams.push(...siteParams);
     }
@@ -1058,6 +1076,79 @@ class DataStore {
   }
 
 
+  // --- Visibility (hide/show sites and countries) -------------------------
+  //
+  // A site can be hidden in two layers:
+  //   1. Per-site:    sites.is_hidden = 1
+  //   2. Per-country: an entry in hidden_countries.country
+  //
+  // Both filters live in getAllSites / listFavoriteSites /
+  // listAllTaskActivities (site branch only). getSiteById intentionally
+  // does NOT filter — a direct URL or bookmark to /site/:id still works.
+
+  /** Toggle the is_hidden flag on one site. Idempotent. */
+  setSiteHidden(siteId: string, hidden: boolean): Site | null {
+    const exists = getDb().prepare("SELECT 1 FROM sites WHERE site_id = ?").get(siteId);
+    if (!exists) return null;
+    getDb().prepare("UPDATE sites SET is_hidden = ?, updated_at = CURRENT_TIMESTAMP WHERE site_id = ?")
+      .run(hidden ? 1 : 0, siteId);
+    return this.getSiteById(siteId);
+  }
+
+  listHiddenCountries(): Array<{ country: string; hidden_by?: string; hidden_at: string }> {
+    return getDb().prepare(
+      "SELECT country, hidden_by, hidden_at FROM hidden_countries ORDER BY country"
+    ).all() as Array<{ country: string; hidden_by?: string; hidden_at: string }>;
+  }
+
+  isCountryHidden(country: string): boolean {
+    const row = getDb().prepare("SELECT 1 AS v FROM hidden_countries WHERE country = ?").get(country);
+    return !!row;
+  }
+
+  /** Add a country to the hide list. Idempotent. */
+  addHiddenCountry(country: string, hiddenBy?: string): boolean {
+    const result = getDb().prepare(
+      "INSERT OR IGNORE INTO hidden_countries (country, hidden_by) VALUES (?, ?)"
+    ).run(country, hiddenBy ?? null);
+    return result.changes > 0;
+  }
+
+  /** Remove a country from the hide list. Idempotent. */
+  removeHiddenCountry(country: string): boolean {
+    const result = getDb().prepare("DELETE FROM hidden_countries WHERE country = ?").run(country);
+    return result.changes > 0;
+  }
+
+  /**
+   * Full country list with counts — drives the /admin/countries page.
+   * `hidden_in_list` flags the country-level hide; the per-site numbers
+   * come straight from the sites table without applying any visibility
+   * filter so the admin sees the true totals.
+   */
+  listAllCountriesWithCounts(): Array<{
+    country: string;
+    total: number;
+    hidden_sites: number;
+    visible_sites: number;
+    country_hidden: boolean;
+  }> {
+    const rows = getDb().prepare(`
+      SELECT
+        country,
+        COUNT(*) AS total,
+        SUM(CASE WHEN is_hidden = 1 THEN 1 ELSE 0 END) AS hidden_sites,
+        SUM(CASE WHEN is_hidden = 0 THEN 1 ELSE 0 END) AS visible_sites
+      FROM sites
+      WHERE country IS NOT NULL AND country != ''
+      GROUP BY country
+      ORDER BY country
+    `).all() as Array<{ country: string; total: number; hidden_sites: number; visible_sites: number }>;
+    const hidden = new Set(this.listHiddenCountries().map((r) => r.country));
+    return rows.map((r) => ({ ...r, country_hidden: hidden.has(r.country) }));
+  }
+
+
   // --- Favorites ----------------------------------------------------------
   //
   // site_favorites stores nothing about the Site itself; it only points at
@@ -1108,6 +1199,8 @@ class DataStore {
       FROM site_favorites f
       JOIN sites s ON s.site_id = f.site_id
       WHERE s.record_status != 'Archived'
+        AND s.is_hidden = 0
+        AND s.country NOT IN (SELECT country FROM hidden_countries)
       ORDER BY datetime(f.created_at) DESC, s.site_name
     `).all() as Array<Record<string, unknown>>;
 

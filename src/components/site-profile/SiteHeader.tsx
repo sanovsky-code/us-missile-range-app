@@ -1,11 +1,21 @@
 import { Site } from "@/lib/types";
 import { SizeBadge, ConfidenceBadge, StatusBadge } from "@/components/ui/Badge";
 import FavoriteButton from "@/components/site-profile/FavoriteButton";
-import { MapPin, Building2, Shield } from "lucide-react";
+import VisibilityToggle from "@/components/site-profile/VisibilityToggle";
+import { MapPin, Building2, Shield, EyeOff } from "lucide-react";
 
 export default function SiteHeader({ site }: { site: Site }) {
   return (
     <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
+      {/* Banner: only renders when this site is hidden. Lets a visitor who
+         reached the page via direct URL / bookmark see why it's not on
+         the map without having to dig through admin pages. */}
+      {site.is_hidden && (
+        <div className="mb-3 flex items-center gap-2 p-2 bg-amber-50 border border-amber-200 rounded-md text-sm text-amber-900">
+          <EyeOff className="w-4 h-4 flex-shrink-0" />
+          אתר זה מוסתר מהמפה ומהחיפוש. לחץ על &quot;מוסתר&quot; להחזרה.
+        </div>
+      )}
       <div className="flex items-start justify-between gap-4 mb-4">
         <div>
           <h1 className="text-2xl font-bold text-gray-900 text-left" dir="ltr">{site.site_name}</h1>
@@ -25,6 +35,7 @@ export default function SiteHeader({ site }: { site: Site }) {
         </div>
         <div className="flex items-center gap-2 flex-shrink-0">
           <FavoriteButton siteId={site.site_id} initialIsFavorite={site.is_favorite ?? false} />
+          <VisibilityToggle siteId={site.site_id} initialIsHidden={site.is_hidden ?? false} />
           <SizeBadge sizeCategory={site.size_category} />
           <ConfidenceBadge level={site.confidence_level} />
           <StatusBadge status={site.record_status} />

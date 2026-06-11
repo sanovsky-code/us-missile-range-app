@@ -31,6 +31,10 @@ export interface Site {
   contacts?: Contact[];
   sources?: Source[];
   is_favorite?: boolean;
+  /** Display visibility — when true the site is excluded from the map,
+   * autocomplete, favorites, and Management task feed. The detail page
+   * still loads via a direct URL so bookmarks keep working. */
+  is_hidden?: boolean;
 }
 
 export interface SiteListItem {

@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Map, ClipboardList, Rocket, Upload, Star, Info, Users } from "lucide-react";
+import { Map, ClipboardList, Rocket, Upload, Star, Info, Users, Globe } from "lucide-react";
 
 export default function Navbar() {
   const pathname = usePathname();
@@ -17,6 +17,7 @@ export default function Navbar() {
     { href: "/contacts", label: "אנשי קשר", icon: Users },
     { href: "/management", label: "Management", icon: ClipboardList },
     { href: "/import", label: "ייבוא נתונים", icon: Upload },
+    { href: "/admin/countries", label: "ניהול מדינות", icon: Globe },
     { href: "/about", label: "אודות", icon: Info },
   ];
 
