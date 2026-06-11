@@ -452,6 +452,138 @@ export interface ContactTimelineActivity {
   parent_activity_id?: number;
 }
 
+// --- Opportunities (Salesforce-style sales pipeline) -----------------------
+//
+// One Opportunity = one sale of a radar / system to a customer. Always linked
+// to exactly one Site (the customer is picked in the UI via Country → Site).
+// Stages and probabilities are tailored to the defense-industry sales cycle.
+// Hebrew labels live in STAGE_HEBREW; the DB stores the English value.
+
+export const OPPORTUNITY_STAGES = [
+  "Initial Contact",
+  "RFI Submitted",
+  "Demo",
+  "Proposal",
+  "Negotiation",
+  "Awarded",
+  "Lost",
+] as const;
+export type OpportunityStage = (typeof OPPORTUNITY_STAGES)[number];
+
+/** Salesforce-style default win probability per stage. Overridable per
+ * opportunity but seeded from this map whenever the stage changes. */
+export const STAGE_PROBABILITY: Record<OpportunityStage, number> = {
+  "Initial Contact": 10,
+  "RFI Submitted": 25,
+  Demo: 40,
+  Proposal: 60,
+  Negotiation: 80,
+  Awarded: 100,
+  Lost: 0,
+};
+
+/** Hebrew labels for picklist rendering. DB always stores the English key. */
+export const STAGE_HEBREW: Record<OpportunityStage, string> = {
+  "Initial Contact": "קשר ראשוני",
+  "RFI Submitted": "הוגש RFI",
+  Demo: "הדגמה",
+  Proposal: "הצעה",
+  Negotiation: "משא ומתן",
+  Awarded: "זכייה",
+  Lost: "אבדה",
+};
+
+export const OPPORTUNITY_DOC_TYPES = [
+  "Proposal",
+  "RFI",
+  "Contract",
+  "Presentation",
+  "Spec",
+  "Other",
+] as const;
+export type OpportunityDocType = (typeof OPPORTUNITY_DOC_TYPES)[number];
+
+/** Activity type subset for the opportunity timeline. Mirrors the contact
+ * timeline plus the Salesforce "New Event" type with start/end/location. */
+export const OPPORTUNITY_ACTIVITY_TYPES = [
+  "Comment",
+  "Task",
+  "Task Update",
+  "Call",
+  "Event",
+] as const;
+export type OpportunityActivityType = (typeof OPPORTUNITY_ACTIVITY_TYPES)[number];
+
+export interface Opportunity {
+  id: number;
+  name: string;
+  site_id: string;
+  stage: OpportunityStage;
+  probability?: number;
+  amount?: number;
+  close_date?: string;
+  owner?: string;
+  next_step?: string;
+  description?: string;
+  budget_confirmed: boolean;
+  discovery_completed: boolean;
+  roi_analysis_completed: boolean;
+  loss_reason?: string;
+  created_by?: string;
+  created_at: string;
+  updated_by?: string;
+  updated_at?: string;
+  /** Joined for display on the detail page. */
+  site_name?: string;
+  country?: string;
+}
+
+export interface OpportunityListItem {
+  id: number;
+  name: string;
+  site_id: string;
+  site_name: string;
+  country: string;
+  stage: OpportunityStage;
+  probability?: number;
+  amount?: number;
+  close_date?: string;
+  owner?: string;
+  updated_at?: string;
+}
+
+export interface OpportunityTimelineActivity {
+  id: number;
+  opportunity_id: number;
+  activity_type: OpportunityActivityType;
+  subject: string;
+  body?: string;
+  status?: TaskStatus;
+  priority?: TaskPriority;
+  due_date?: string;
+  assigned_to?: string;
+  start_at?: string;
+  end_at?: string;
+  location?: string;
+  attendees?: string;
+  created_by?: string;
+  created_at: string;
+  updated_at?: string;
+  completed_at?: string;
+  parent_activity_id?: number;
+}
+
+export interface OpportunityDocument {
+  id: number;
+  opportunity_id: number;
+  title: string;
+  url: string;
+  doc_type?: OpportunityDocType;
+  notes?: string;
+  created_by?: string;
+  created_at: string;
+}
+
 export interface FilterState {
   search: string;
   countries: string[];

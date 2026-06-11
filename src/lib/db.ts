@@ -295,6 +295,84 @@ CREATE INDEX IF NOT EXISTS idx_contact_timeline_activities_type ON contact_timel
 CREATE INDEX IF NOT EXISTS idx_contact_timeline_activities_parent ON contact_timeline_activities(parent_activity_id);
 CREATE INDEX IF NOT EXISTS idx_contact_timeline_activities_created_at ON contact_timeline_activities(created_at);
 
+-- Salesforce-style sales Opportunity. One opportunity is always linked
+-- to exactly one Site (the customer is picked via Country → Site flow in
+-- the UI). Stage drives Probability via a defaults map in TypeScript,
+-- but Probability is overridable per opportunity.
+CREATE TABLE IF NOT EXISTS opportunities (
+  id                       INTEGER PRIMARY KEY AUTOINCREMENT,
+  name                     TEXT NOT NULL,
+  site_id                  TEXT NOT NULL,
+  stage                    TEXT NOT NULL,
+  probability              INTEGER,
+  amount                   REAL,
+  close_date               TEXT,
+  owner                    TEXT,
+  next_step                TEXT,
+  description              TEXT,
+  budget_confirmed         INTEGER NOT NULL DEFAULT 0,
+  discovery_completed      INTEGER NOT NULL DEFAULT 0,
+  roi_analysis_completed   INTEGER NOT NULL DEFAULT 0,
+  loss_reason              TEXT,
+  created_by               TEXT,
+  created_at               TEXT DEFAULT CURRENT_TIMESTAMP,
+  updated_by               TEXT,
+  updated_at               TEXT,
+  FOREIGN KEY (site_id) REFERENCES sites(site_id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_opportunities_site_id ON opportunities(site_id);
+CREATE INDEX IF NOT EXISTS idx_opportunities_stage ON opportunities(stage);
+CREATE INDEX IF NOT EXISTS idx_opportunities_owner ON opportunities(owner);
+CREATE INDEX IF NOT EXISTS idx_opportunities_close_date ON opportunities(close_date);
+
+-- Per-opportunity Salesforce-style activity timeline. Mirrors the contact
+-- timeline but adds Event-specific columns (start_at/end_at/location/
+-- attendees) for the New Event activity type. These columns stay NULL
+-- for non-Event rows.
+CREATE TABLE IF NOT EXISTS opportunity_timeline_activities (
+  id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+  opportunity_id      INTEGER NOT NULL,
+  activity_type       TEXT NOT NULL,
+  subject             TEXT NOT NULL,
+  body                TEXT,
+  status              TEXT,
+  priority            TEXT,
+  due_date            TEXT,
+  assigned_to         TEXT,
+  start_at            TEXT,
+  end_at              TEXT,
+  location            TEXT,
+  attendees           TEXT,
+  created_by          TEXT,
+  created_at          TEXT DEFAULT CURRENT_TIMESTAMP,
+  updated_at          TEXT,
+  completed_at        TEXT,
+  parent_activity_id  INTEGER,
+  FOREIGN KEY (opportunity_id) REFERENCES opportunities(id) ON DELETE CASCADE,
+  FOREIGN KEY (parent_activity_id) REFERENCES opportunity_timeline_activities(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_opp_timeline_opp_id ON opportunity_timeline_activities(opportunity_id);
+CREATE INDEX IF NOT EXISTS idx_opp_timeline_type ON opportunity_timeline_activities(activity_type);
+CREATE INDEX IF NOT EXISTS idx_opp_timeline_parent ON opportunity_timeline_activities(parent_activity_id);
+CREATE INDEX IF NOT EXISTS idx_opp_timeline_created_at ON opportunity_timeline_activities(created_at);
+
+-- External documents attached to an opportunity. The operator pastes a
+-- URL (OneDrive / SharePoint / network drive); we do NOT host the file.
+-- doc_type is a small picklist: Proposal / RFI / Contract / Presentation /
+-- Spec / Other.
+CREATE TABLE IF NOT EXISTS opportunity_documents (
+  id              INTEGER PRIMARY KEY AUTOINCREMENT,
+  opportunity_id  INTEGER NOT NULL,
+  title           TEXT NOT NULL,
+  url             TEXT NOT NULL,
+  doc_type        TEXT,
+  notes           TEXT,
+  created_by      TEXT,
+  created_at      TEXT DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (opportunity_id) REFERENCES opportunities(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_opp_documents_opp_id ON opportunity_documents(opportunity_id);
+
 -- Per-country hide list. Sites whose country appears here vanish from
 -- the map, the search autocomplete, the favorites list, and the
 -- Management task feed — but their data and audit history are preserved.

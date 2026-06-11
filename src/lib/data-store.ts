@@ -43,6 +43,17 @@ import {
   CountryContactRow,
   CountrySourceRow,
   CountryDataQuality,
+  Opportunity,
+  OpportunityListItem,
+  OpportunityStage,
+  OpportunityTimelineActivity,
+  OpportunityActivityType,
+  OPPORTUNITY_STAGES,
+  OPPORTUNITY_ACTIVITY_TYPES,
+  STAGE_PROBABILITY,
+  OpportunityDocument,
+  OpportunityDocType,
+  OPPORTUNITY_DOC_TYPES,
 } from "./types";
 import { getDb, getDbPath, transaction } from "./db";
 
@@ -1790,6 +1801,360 @@ class DataStore {
 
   deleteContactActivity(id: number): boolean {
     const r = getDb().prepare("DELETE FROM contact_timeline_activities WHERE id = ?").run(id);
+    return r.changes > 0;
+  }
+
+
+
+  // --- Opportunities (Salesforce-style pipeline) ---------------------------
+  //
+  // Opportunities are visibility-aware: rows whose linked Site is hidden
+  // (is_hidden=1 OR country in hidden_countries) are excluded from the list
+  // view. The detail page still loads via direct URL — that mirrors the
+  // bookmark-friendly behavior of /site/[id].
+
+  listOpportunities(filters?: {
+    stage?: OpportunityStage;
+    country?: string;
+    owner?: string;
+    search?: string;
+  }): OpportunityListItem[] {
+    const where: string[] = [
+      "s.is_hidden = 0",
+      "s.country NOT IN (SELECT country FROM hidden_countries)",
+    ];
+    const params: unknown[] = [];
+    if (filters?.stage) { where.push("o.stage = ?"); params.push(filters.stage); }
+    if (filters?.country) { where.push("s.country = ?"); params.push(filters.country); }
+    if (filters?.owner) { where.push("o.owner = ?"); params.push(filters.owner); }
+    if (filters?.search && filters.search.trim()) {
+      where.push("(LOWER(o.name) LIKE ? OR LOWER(s.site_name) LIKE ?)");
+      const q = `%${filters.search.trim().toLowerCase()}%`;
+      params.push(q, q);
+    }
+    return getDb().prepare(`
+      SELECT o.id, o.name, o.site_id, s.site_name, s.country,
+             o.stage, o.probability, o.amount, o.close_date, o.owner, o.updated_at
+      FROM opportunities o
+      JOIN sites s ON s.site_id = o.site_id
+      WHERE ${where.join(" AND ")}
+      ORDER BY datetime(COALESCE(o.updated_at, o.created_at)) DESC, o.id DESC
+    `).all(...params) as OpportunityListItem[];
+  }
+
+  getOpportunity(id: number): Opportunity | null {
+    const row = getDb().prepare(`
+      SELECT o.*, s.site_name AS site_name, s.country AS country
+      FROM opportunities o
+      LEFT JOIN sites s ON s.site_id = o.site_id
+      WHERE o.id = ?
+    `).get(id) as (Omit<Opportunity, "budget_confirmed" | "discovery_completed" | "roi_analysis_completed"> & {
+      budget_confirmed: number;
+      discovery_completed: number;
+      roi_analysis_completed: number;
+    }) | undefined;
+    if (!row) return null;
+    return {
+      ...row,
+      budget_confirmed: !!row.budget_confirmed,
+      discovery_completed: !!row.discovery_completed,
+      roi_analysis_completed: !!row.roi_analysis_completed,
+    };
+  }
+
+  createOpportunity(input: {
+    name: string;
+    site_id: string;
+    stage: OpportunityStage;
+    probability?: number;
+    amount?: number;
+    close_date?: string;
+    owner?: string;
+    next_step?: string;
+    description?: string;
+    budget_confirmed?: boolean;
+    discovery_completed?: boolean;
+    roi_analysis_completed?: boolean;
+    loss_reason?: string;
+    created_by?: string;
+  }): Opportunity {
+    if (!input.name || !input.name.trim()) throw new Error("name is required");
+    if (!input.site_id || !input.site_id.trim()) throw new Error("site_id is required");
+    if (!OPPORTUNITY_STAGES.includes(input.stage)) {
+      throw new Error(`Invalid stage: ${input.stage}`);
+    }
+    const siteExists = getDb().prepare("SELECT 1 FROM sites WHERE site_id = ?").get(input.site_id);
+    if (!siteExists) throw new Error(`Site "${input.site_id}" not found`);
+
+    // If probability is not provided, default from stage map. Operator can
+    // override later via update.
+    const probability = input.probability ?? STAGE_PROBABILITY[input.stage];
+
+    const result = getDb().prepare(`
+      INSERT INTO opportunities (
+        name, site_id, stage, probability, amount, close_date, owner,
+        next_step, description, budget_confirmed, discovery_completed,
+        roi_analysis_completed, loss_reason, created_by
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      input.name.trim(), input.site_id, input.stage, probability,
+      input.amount ?? null, norm(input.close_date), norm(input.owner),
+      norm(input.next_step), norm(input.description),
+      input.budget_confirmed ? 1 : 0,
+      input.discovery_completed ? 1 : 0,
+      input.roi_analysis_completed ? 1 : 0,
+      norm(input.loss_reason), norm(input.created_by),
+    );
+    return this.getOpportunity(Number(result.lastInsertRowid))!;
+  }
+
+  updateOpportunity(id: number, patch: Partial<{
+    name: string;
+    site_id: string;
+    stage: OpportunityStage;
+    probability: number | null;
+    amount: number | null;
+    close_date: string | null;
+    owner: string | null;
+    next_step: string | null;
+    description: string | null;
+    budget_confirmed: boolean;
+    discovery_completed: boolean;
+    roi_analysis_completed: boolean;
+    loss_reason: string | null;
+    updated_by: string;
+  }>): Opportunity | null {
+    const existing = this.getOpportunity(id);
+    if (!existing) return null;
+
+    if (patch.stage && !OPPORTUNITY_STAGES.includes(patch.stage)) {
+      throw new Error(`Invalid stage: ${patch.stage}`);
+    }
+    if (patch.site_id) {
+      const ok = getDb().prepare("SELECT 1 FROM sites WHERE site_id = ?").get(patch.site_id);
+      if (!ok) throw new Error(`Site "${patch.site_id}" not found`);
+    }
+
+    const updates: string[] = [];
+    const params: unknown[] = [];
+    if (patch.name !== undefined) { updates.push("name = ?"); params.push(patch.name.trim()); }
+    if (patch.site_id !== undefined) { updates.push("site_id = ?"); params.push(patch.site_id); }
+    if (patch.stage !== undefined) {
+      updates.push("stage = ?"); params.push(patch.stage);
+      // If the caller didn't simultaneously override probability, snap it to
+      // the new stage default. This matches Salesforce behavior: stage change
+      // updates probability unless the operator has explicitly set one.
+      if (patch.probability === undefined) {
+        updates.push("probability = ?");
+        params.push(STAGE_PROBABILITY[patch.stage]);
+      }
+    }
+    if (patch.probability !== undefined) {
+      updates.push("probability = ?");
+      params.push(patch.probability);
+    }
+    if (patch.amount !== undefined) { updates.push("amount = ?"); params.push(patch.amount); }
+    if (patch.close_date !== undefined) { updates.push("close_date = ?"); params.push(norm(patch.close_date)); }
+    if (patch.owner !== undefined) { updates.push("owner = ?"); params.push(norm(patch.owner)); }
+    if (patch.next_step !== undefined) { updates.push("next_step = ?"); params.push(norm(patch.next_step)); }
+    if (patch.description !== undefined) { updates.push("description = ?"); params.push(norm(patch.description)); }
+    if (patch.budget_confirmed !== undefined) { updates.push("budget_confirmed = ?"); params.push(patch.budget_confirmed ? 1 : 0); }
+    if (patch.discovery_completed !== undefined) { updates.push("discovery_completed = ?"); params.push(patch.discovery_completed ? 1 : 0); }
+    if (patch.roi_analysis_completed !== undefined) { updates.push("roi_analysis_completed = ?"); params.push(patch.roi_analysis_completed ? 1 : 0); }
+    if (patch.loss_reason !== undefined) { updates.push("loss_reason = ?"); params.push(norm(patch.loss_reason)); }
+
+    if (updates.length === 0) return existing;
+    updates.push("updated_at = CURRENT_TIMESTAMP");
+    if (patch.updated_by !== undefined) {
+      updates.push("updated_by = ?");
+      params.push(norm(patch.updated_by));
+    }
+    params.push(id);
+    getDb().prepare(`UPDATE opportunities SET ${updates.join(", ")} WHERE id = ?`).run(...params);
+    return this.getOpportunity(id);
+  }
+
+  deleteOpportunity(id: number): boolean {
+    const r = getDb().prepare("DELETE FROM opportunities WHERE id = ?").run(id);
+    return r.changes > 0;
+  }
+
+  // --- Opportunity timeline activities -----------------------------------
+
+  listOpportunityActivities(opportunityId: number, type?: string): OpportunityTimelineActivity[] {
+    if (type) {
+      return getDb()
+        .prepare(`SELECT * FROM opportunity_timeline_activities
+                  WHERE opportunity_id = ? AND activity_type = ?
+                  ORDER BY datetime(created_at) DESC, id DESC`)
+        .all(opportunityId, type) as OpportunityTimelineActivity[];
+    }
+    return getDb()
+      .prepare(`SELECT * FROM opportunity_timeline_activities WHERE opportunity_id = ?
+                ORDER BY datetime(created_at) DESC, id DESC`)
+      .all(opportunityId) as OpportunityTimelineActivity[];
+  }
+
+  getOpportunityActivity(id: number): OpportunityTimelineActivity | null {
+    const row = getDb().prepare("SELECT * FROM opportunity_timeline_activities WHERE id = ?").get(id);
+    return (row as OpportunityTimelineActivity | undefined) ?? null;
+  }
+
+  createOpportunityActivity(input: {
+    opportunity_id: number;
+    activity_type: OpportunityActivityType;
+    subject: string;
+    body?: string;
+    status?: TaskStatus;
+    priority?: TaskPriority;
+    due_date?: string;
+    assigned_to?: string;
+    start_at?: string;
+    end_at?: string;
+    location?: string;
+    attendees?: string;
+    created_by?: string;
+    parent_activity_id?: number;
+  }): OpportunityTimelineActivity {
+    if (!input.subject || !input.subject.trim()) {
+      throw new Error("subject is required");
+    }
+    if (!OPPORTUNITY_ACTIVITY_TYPES.includes(input.activity_type)) {
+      throw new Error(`Invalid activity_type: ${input.activity_type}`);
+    }
+    const oppExists = getDb().prepare("SELECT 1 FROM opportunities WHERE id = ?").get(input.opportunity_id);
+    if (!oppExists) throw new Error(`Opportunity ${input.opportunity_id} not found`);
+
+    let status: TaskStatus | null = null;
+    let priority: TaskPriority | null = null;
+    if (input.activity_type === "Task") {
+      status = input.status && TASK_STATUSES.includes(input.status) ? input.status : "Open";
+      priority = input.priority && TASK_PRIORITIES.includes(input.priority) ? input.priority : "Medium";
+    } else if (input.status && TASK_STATUSES.includes(input.status)) {
+      status = input.status;
+    }
+
+    const result = getDb().prepare(`
+      INSERT INTO opportunity_timeline_activities (
+        opportunity_id, activity_type, subject, body, status, priority,
+        due_date, assigned_to, start_at, end_at, location, attendees,
+        created_by, parent_activity_id
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      input.opportunity_id, input.activity_type, input.subject.trim(),
+      input.body?.trim() || null, status, priority,
+      input.due_date || null, input.assigned_to || null,
+      input.start_at || null, input.end_at || null,
+      input.location?.trim() || null, input.attendees?.trim() || null,
+      input.created_by || null, input.parent_activity_id ?? null,
+    );
+    return this.getOpportunityActivity(Number(result.lastInsertRowid))!;
+  }
+
+  updateOpportunityActivity(id: number, patch: Partial<{
+    subject: string;
+    body: string;
+    status: TaskStatus;
+    priority: TaskPriority;
+    due_date: string | null;
+    assigned_to: string | null;
+    start_at: string | null;
+    end_at: string | null;
+    location: string | null;
+    attendees: string | null;
+    created_by: string | null;
+  }>): OpportunityTimelineActivity | null {
+    const existing = this.getOpportunityActivity(id);
+    if (!existing) return null;
+    if (patch.status && !TASK_STATUSES.includes(patch.status)) {
+      throw new Error(`Invalid status: ${patch.status}`);
+    }
+    if (patch.priority && !TASK_PRIORITIES.includes(patch.priority)) {
+      throw new Error(`Invalid priority: ${patch.priority}`);
+    }
+    const isTask = existing.activity_type === "Task";
+    const statusChanged = isTask && patch.status !== undefined && patch.status !== existing.status;
+
+    return transaction((db) => {
+      const updates: string[] = [];
+      const params: unknown[] = [];
+      if (patch.subject !== undefined) { updates.push("subject = ?"); params.push(patch.subject.trim()); }
+      if (patch.body !== undefined) { updates.push("body = ?"); params.push(patch.body?.trim() || null); }
+      if (patch.status !== undefined) { updates.push("status = ?"); params.push(patch.status); }
+      if (patch.priority !== undefined) { updates.push("priority = ?"); params.push(patch.priority); }
+      if (patch.due_date !== undefined) { updates.push("due_date = ?"); params.push(patch.due_date || null); }
+      if (patch.assigned_to !== undefined) { updates.push("assigned_to = ?"); params.push(patch.assigned_to || null); }
+      if (patch.start_at !== undefined) { updates.push("start_at = ?"); params.push(patch.start_at || null); }
+      if (patch.end_at !== undefined) { updates.push("end_at = ?"); params.push(patch.end_at || null); }
+      if (patch.location !== undefined) { updates.push("location = ?"); params.push(patch.location?.trim() || null); }
+      if (patch.attendees !== undefined) { updates.push("attendees = ?"); params.push(patch.attendees?.trim() || null); }
+      if (statusChanged && patch.status === "Done") updates.push("completed_at = CURRENT_TIMESTAMP");
+      if (statusChanged && existing.status === "Done" && patch.status !== "Done") updates.push("completed_at = NULL");
+      if (updates.length === 0) return existing;
+      updates.push("updated_at = CURRENT_TIMESTAMP");
+      params.push(id);
+      db.prepare(`UPDATE opportunity_timeline_activities SET ${updates.join(", ")} WHERE id = ?`).run(...params);
+
+      if (statusChanged) {
+        db.prepare(`
+          INSERT INTO opportunity_timeline_activities (
+            opportunity_id, activity_type, subject, body, parent_activity_id, created_by
+          ) VALUES (?, 'Task Update', ?, ?, ?, ?)
+        `).run(
+          existing.opportunity_id, "Task status changed",
+          `Status changed from ${existing.status ?? "(unset)"} to ${patch.status}.`,
+          id, patch.created_by ?? null,
+        );
+      }
+      return this.getOpportunityActivity(id);
+    });
+  }
+
+  deleteOpportunityActivity(id: number): boolean {
+    const r = getDb().prepare("DELETE FROM opportunity_timeline_activities WHERE id = ?").run(id);
+    return r.changes > 0;
+  }
+
+  // --- Opportunity documents (URL links only) ----------------------------
+
+  listOpportunityDocuments(opportunityId: number): OpportunityDocument[] {
+    return getDb()
+      .prepare(`SELECT * FROM opportunity_documents WHERE opportunity_id = ?
+                ORDER BY datetime(created_at) DESC, id DESC`)
+      .all(opportunityId) as OpportunityDocument[];
+  }
+
+  createOpportunityDocument(input: {
+    opportunity_id: number;
+    title: string;
+    url: string;
+    doc_type?: OpportunityDocType;
+    notes?: string;
+    created_by?: string;
+  }): OpportunityDocument {
+    if (!input.title || !input.title.trim()) throw new Error("title is required");
+    if (!input.url || !input.url.trim()) throw new Error("url is required");
+    if (input.doc_type && !OPPORTUNITY_DOC_TYPES.includes(input.doc_type)) {
+      throw new Error(`Invalid doc_type: ${input.doc_type}`);
+    }
+    const oppExists = getDb().prepare("SELECT 1 FROM opportunities WHERE id = ?").get(input.opportunity_id);
+    if (!oppExists) throw new Error(`Opportunity ${input.opportunity_id} not found`);
+
+    const result = getDb().prepare(`
+      INSERT INTO opportunity_documents (
+        opportunity_id, title, url, doc_type, notes, created_by
+      ) VALUES (?, ?, ?, ?, ?, ?)
+    `).run(
+      input.opportunity_id, input.title.trim(), input.url.trim(),
+      input.doc_type || null, input.notes?.trim() || null,
+      input.created_by || null,
+    );
+    return getDb().prepare("SELECT * FROM opportunity_documents WHERE id = ?")
+      .get(Number(result.lastInsertRowid)) as OpportunityDocument;
+  }
+
+  deleteOpportunityDocument(id: number): boolean {
+    const r = getDb().prepare("DELETE FROM opportunity_documents WHERE id = ?").run(id);
     return r.changes > 0;
   }
 
