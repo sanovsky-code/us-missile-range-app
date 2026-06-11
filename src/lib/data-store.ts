@@ -446,6 +446,21 @@ class DataStore {
   getAllSites(filters?: FilterState): SiteListItem[] {
     const db = getDb();
 
+    // Stale-filter silent reset (Q4 behavior (א)). If the URL preserved a
+    // selection like ?country=Algeria from before Algeria was hidden, drop
+    // the orphan values from the filter arrays in place. The user sees
+    // ALL visible sites instead of an empty list with an inexplicable
+    // dangling selection.
+    if (filters) {
+      const opts = this.getFilterOptions();
+      filters.countries        = filters.countries.filter((v)        => opts.countries.includes(v));
+      filters.states           = filters.states.filter((v)           => opts.states.includes(v));
+      filters.siteTypes        = filters.siteTypes.filter((v)        => opts.siteTypes.includes(v));
+      filters.sizeCategories   = filters.sizeCategories.filter((v)   => opts.sizeCategories.includes(v));
+      filters.confidenceLevels = filters.confidenceLevels.filter((v) => opts.confidenceLevels.includes(v));
+      filters.activityTypes    = filters.activityTypes.filter((v)    => opts.activityTypes.includes(v));
+    }
+
     // Visibility layer: filter out individually-hidden sites AND sites in
     // any country listed in hidden_countries. The map, search autocomplete,
     // sidebar list, and Management feed all flow through here, so this
@@ -683,23 +698,50 @@ class DataStore {
   }
 
 
+  /**
+   * Filter dropdowns shown in the map sidebar and any other user-facing UI.
+   * EVERY option list (countries, states, site types, sizes, confidence
+   * levels, activity categories) is derived from VISIBLE sites only, so a
+   * country / state / value that only exists on hidden sites disappears
+   * from the dropdown. The /countries admin page remains the only place
+   * where hidden countries are visible.
+   *
+   * Specializations stay hardcoded — they are computed strings, not a DB
+   * column, and computing them across all visible sites is expensive.
+   * Selecting a "stale" specialization just returns an empty list.
+   */
   getFilterOptions(): FilterOptions {
     const db = getDb();
-    const distinct = (col: string) =>
-      (db.prepare(`SELECT DISTINCT ${col} AS v FROM sites WHERE ${col} IS NOT NULL AND ${col} != '' ORDER BY ${col}`)
-        .all() as { v: string }[])
-        .map((r) => r.v);
-    const activityCats = (db.prepare(
-      `SELECT DISTINCT activity_category AS v FROM site_range_activities WHERE activity_category IS NOT NULL ORDER BY activity_category`
-    ).all() as { v: string }[]).map((r) => r.v);
+    const distinctFromVisible = (col: string) =>
+      (db.prepare(`
+        SELECT DISTINCT ${col} AS v FROM sites
+        WHERE ${col} IS NOT NULL AND ${col} != ''
+          AND record_status != 'Archived'
+          AND is_hidden = 0
+          AND country NOT IN (SELECT country FROM hidden_countries)
+        ORDER BY ${col}
+      `).all() as { v: string }[]).map((r) => r.v);
+
+    const activityCats = (db.prepare(`
+      SELECT DISTINCT activity_category AS v
+      FROM site_range_activities
+      WHERE activity_category IS NOT NULL
+        AND site_id IN (
+          SELECT site_id FROM sites
+          WHERE record_status != 'Archived'
+            AND is_hidden = 0
+            AND country NOT IN (SELECT country FROM hidden_countries)
+        )
+      ORDER BY activity_category
+    `).all() as { v: string }[]).map((r) => r.v);
 
     return {
-      countries: distinct("country"),
-      states: distinct("state"),
-      siteTypes: distinct("site_type"),
-      sizeCategories: distinct("size_category"),
+      countries: distinctFromVisible("country"),
+      states: distinctFromVisible("state"),
+      siteTypes: distinctFromVisible("site_type"),
+      sizeCategories: distinctFromVisible("size_category"),
       activityTypes: activityCats,
-      confidenceLevels: ["High", "Medium", "Low"],
+      confidenceLevels: distinctFromVisible("confidence_level"),
       specializations: ["Ballistic Missile Tracking", "Satellite Launch Tracking"],
     };
   }
@@ -1491,10 +1533,22 @@ class DataStore {
   // site_contacts (per-site) and the Excel-imported contacts table.
 
   listCrmContacts(): CrmContactListItem[] {
+    // site_name resolves only when the linked site is visible. If the
+    // operator linked the contact to a site that's now hidden (per-site
+    // is_hidden OR country in hidden_countries), the column comes back
+    // NULL — the contact row itself stays in the list, but its site
+    // reference becomes silent so we don't leak the hidden site name.
     return getDb().prepare(`
       SELECT c.id, c.full_name, c.organization_name, c.contact_type,
              c.email, c.phone, c.mobile, c.title, c.owner, c.site_id,
-             s.site_name AS site_name
+             CASE
+               WHEN s.site_id IS NOT NULL
+                 AND s.record_status != 'Archived'
+                 AND s.is_hidden = 0
+                 AND s.country NOT IN (SELECT country FROM hidden_countries)
+               THEN s.site_name
+               ELSE NULL
+             END AS site_name
       FROM crm_contacts c
       LEFT JOIN sites s ON s.site_id = c.site_id
       ORDER BY COALESCE(c.organization_name, '~') ASC, c.full_name ASC
