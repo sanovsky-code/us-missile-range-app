@@ -17,7 +17,7 @@ export default function Navbar() {
     { href: "/contacts", label: "אנשי קשר", icon: Users },
     { href: "/management", label: "Management", icon: ClipboardList },
     { href: "/import", label: "ייבוא נתונים", icon: Upload },
-    { href: "/admin/countries", label: "ניהול מדינות", icon: Globe },
+    { href: "/countries", label: "מדינות", icon: Globe },
     { href: "/about", label: "אודות", icon: Info },
   ];
 

@@ -1,18 +1,18 @@
 "use client";
 
 /**
- * /admin/countries — country-level visibility management.
+ * /countries — Salesforce-style list of every country in the system.
  *
- * Lists every country in the sites table with total / visible / hidden
- * counts and a toggle to hide or show the whole country. Hidden countries
- * are filtered out of the map, autocomplete, /favorites, and the
- * Management task feed — but a direct URL to /site/:id still works.
+ * Each row shows total / hidden site counts and links to the country
+ * portal page (/country/:name) — the "Account" record. Inline toggle
+ * to hide / show the whole country also still works for fast admin.
  *
- * Adding a country to the hide list is a "rule" — sites later imported
+ * Adding a country to the hide list is a rule: sites later imported
  * into that country are automatically hidden without further action.
  */
+import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Globe, Eye, EyeOff, Loader2, Search, RefreshCw } from "lucide-react";
+import { Globe, Eye, EyeOff, Loader2, Search, RefreshCw, ExternalLink } from "lucide-react";
 
 interface CountryRow {
   country: string;
@@ -134,7 +134,14 @@ export default function AdminCountriesPage() {
                 {filtered.map((r) => (
                   <tr key={r.country} className="border-b border-gray-100 hover:bg-gray-50/50">
                     <td className="px-4 py-3">
-                      <span className="font-medium text-gray-900" dir="auto">{r.country}</span>
+                      <Link
+                        href={`/country/${encodeURIComponent(r.country)}`}
+                        className="font-medium text-blue-700 hover:text-blue-900 hover:underline inline-flex items-center gap-1"
+                        dir="auto"
+                      >
+                        {r.country}
+                        <ExternalLink className="w-3 h-3" />
+                      </Link>
                     </td>
                     <td className="px-4 py-3 text-gray-700">{r.total}</td>
                     <td className="px-4 py-3 text-gray-700">

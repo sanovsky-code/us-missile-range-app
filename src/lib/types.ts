@@ -71,6 +71,103 @@ export interface SiteFavorite {
   notes?: string;
 }
 
+// --- Country portal (Salesforce-style aggregate view) ---------------------
+//
+// Country is not a stored entity — it's a virtual aggregate built on top of
+// sites.country. The portal page joins across sites, radars,
+// site_range_activities, site_timeline_activities, contacts /
+// site_contacts / crm_contacts, and sources to give the operator a single
+// "what's going on in <country>" view.
+
+export interface CountryOverviewMeta {
+  name: string;
+  total_sites: number;
+  visible_sites: number;
+  hidden_sites: number;
+  country_hidden: boolean;
+  total_radars: number;
+  total_operational_activities: number;
+  open_tasks: number;
+}
+
+export interface CountryDataQuality {
+  /** Counts by confidence_level — High / Medium / Low / (unknown) — across
+   * every site in the country (visible AND hidden). */
+  by_confidence: Array<{ level: string; count: number }>;
+  /** Counts by record_status — Draft / Verified / Published / etc. */
+  by_record_status: Array<{ status: string; count: number }>;
+}
+
+export interface CountrySiteRow {
+  site_id: string;
+  site_name: string;
+  site_type?: string;
+  size_category?: string;
+  confidence_level?: string;
+  record_status?: string;
+  state?: string;
+  is_hidden: boolean;
+  radar_count: number;
+  activity_count: number;
+  open_task_count: number;
+}
+
+export interface CountryRadarBreakdown {
+  by_type: Array<{ key: string; count: number }>;
+  by_band: Array<{ key: string; count: number }>;
+  top_models: Array<{ key: string; count: number }>;
+}
+
+export interface CountryActivityBreakdown {
+  by_category: Array<{ key: string; count: number }>;
+  recent: Array<{
+    activity_id: string;
+    site_id: string;
+    site_name: string;
+    activity_category?: string;
+    activity_description?: string;
+    start_year?: number;
+    end_year?: number;
+    status?: string;
+  }>;
+}
+
+export interface CountryContactRow {
+  /** Where this contact lives in the model. Drives the "פתח" link. */
+  source: "site_contact" | "imported_contact" | "crm_contact";
+  /** Stringified id of the underlying row, namespaced by source so the
+   * portal can build a stable React key. */
+  ref_id: string;
+  full_name: string;
+  organization?: string;
+  contact_type?: string;
+  email?: string;
+  phone?: string;
+  site_id: string;
+  site_name: string;
+}
+
+export interface CountrySourceRow {
+  source_id: string;
+  source_title: string;
+  source_type?: string;
+  publisher?: string;
+  /** How many entities in the country (sites/radars/activities/contacts)
+   * cite this source. */
+  citation_count: number;
+}
+
+export interface CountryOverview {
+  meta: CountryOverviewMeta;
+  data_quality: CountryDataQuality;
+  sites: CountrySiteRow[];
+  radar_breakdown: CountryRadarBreakdown;
+  activity_breakdown: CountryActivityBreakdown;
+  contacts: CountryContactRow[];
+  sources: CountrySourceRow[];
+}
+
+
 /** Joined favorite row + the Site columns the /favorites page needs to
  * render without a second round-trip. */
 export interface FavoriteSiteListItem extends SiteListItem {

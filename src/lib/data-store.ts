@@ -35,6 +35,14 @@ import {
   ContactTimelineActivity,
   UnifiedTaskRow,
   TaskParentKind,
+  CountryOverview,
+  CountryOverviewMeta,
+  CountrySiteRow,
+  CountryRadarBreakdown,
+  CountryActivityBreakdown,
+  CountryContactRow,
+  CountrySourceRow,
+  CountryDataQuality,
 } from "./types";
 import { getDb, getDbPath, transaction } from "./db";
 
@@ -1146,6 +1154,244 @@ class DataStore {
     `).all() as Array<{ country: string; total: number; hidden_sites: number; visible_sites: number }>;
     const hidden = new Set(this.listHiddenCountries().map((r) => r.country));
     return rows.map((r) => ({ ...r, country_hidden: hidden.has(r.country) }));
+  }
+
+
+  // --- Country portal (Salesforce-style aggregate view) -------------------
+  //
+  // Country is not a stored entity — these methods build a virtual
+  // "Country" record by aggregating across sites and their related tables.
+  // Used by /country/[name]. Each method is independent so the page can
+  // call them in parallel (server component) or future API endpoints can
+  // expose subsets.
+  //
+  // Note: unlike the regular getAllSites visibility filter, these methods
+  // DO NOT hide individually-hidden sites or sites in hidden countries —
+  // the operator opened the portal explicitly, so they want the full
+  // picture. The visible_sites / hidden_sites split is surfaced in the
+  // meta block instead.
+
+  getCountryMeta(country: string): CountryOverviewMeta | null {
+    const db = getDb();
+    const row = db.prepare(`
+      SELECT
+        COUNT(*) AS total_sites,
+        SUM(CASE WHEN is_hidden = 0 THEN 1 ELSE 0 END) AS visible_sites,
+        SUM(CASE WHEN is_hidden = 1 THEN 1 ELSE 0 END) AS hidden_sites
+      FROM sites WHERE country = ?
+    `).get(country) as { total_sites: number; visible_sites: number; hidden_sites: number };
+    if (row.total_sites === 0) return null;
+
+    const radarRow = db.prepare(
+      "SELECT COUNT(*) AS n FROM radars WHERE site_id IN (SELECT site_id FROM sites WHERE country = ?)"
+    ).get(country) as { n: number };
+    const actRow = db.prepare(
+      "SELECT COUNT(*) AS n FROM site_range_activities WHERE site_id IN (SELECT site_id FROM sites WHERE country = ?)"
+    ).get(country) as { n: number };
+    const taskRow = db.prepare(`
+      SELECT COUNT(*) AS n FROM site_timeline_activities
+       WHERE activity_type = 'Task' AND status IN ('Open','In Progress')
+         AND site_id IN (SELECT site_id FROM sites WHERE country = ?)
+    `).get(country) as { n: number };
+    const hiddenRow = db.prepare("SELECT 1 AS v FROM hidden_countries WHERE country = ?").get(country);
+
+    return {
+      name: country,
+      total_sites: row.total_sites,
+      visible_sites: row.visible_sites,
+      hidden_sites: row.hidden_sites,
+      country_hidden: !!hiddenRow,
+      total_radars: radarRow.n,
+      total_operational_activities: actRow.n,
+      open_tasks: taskRow.n,
+    };
+  }
+
+  getCountrySites(country: string): CountrySiteRow[] {
+    return getDb().prepare(`
+      SELECT
+        s.site_id, s.site_name, s.site_type, s.size_category,
+        s.confidence_level, s.record_status, s.state, s.is_hidden,
+        (SELECT COUNT(*) FROM radars r WHERE r.site_id = s.site_id) AS radar_count,
+        (SELECT COUNT(*) FROM site_range_activities a WHERE a.site_id = s.site_id) AS activity_count,
+        (SELECT COUNT(*) FROM site_timeline_activities a
+          WHERE a.site_id = s.site_id AND a.activity_type = 'Task'
+            AND a.status IN ('Open','In Progress')) AS open_task_count
+      FROM sites s
+      WHERE s.country = ?
+      ORDER BY s.is_hidden ASC, s.site_name ASC
+    `).all(country) as CountrySiteRow[];
+  }
+
+  getCountryDataQuality(country: string): CountryDataQuality {
+    const byConf = getDb().prepare(`
+      SELECT COALESCE(NULLIF(confidence_level, ''), 'Unknown') AS level, COUNT(*) AS count
+      FROM sites WHERE country = ?
+      GROUP BY level
+      ORDER BY CASE level WHEN 'High' THEN 0 WHEN 'Medium' THEN 1 WHEN 'Low' THEN 2 ELSE 3 END
+    `).all(country) as Array<{ level: string; count: number }>;
+    const byStatus = getDb().prepare(`
+      SELECT COALESCE(NULLIF(record_status, ''), 'Unknown') AS status, COUNT(*) AS count
+      FROM sites WHERE country = ?
+      GROUP BY status
+      ORDER BY count DESC
+    `).all(country) as Array<{ status: string; count: number }>;
+    return { by_confidence: byConf, by_record_status: byStatus };
+  }
+
+  getCountryRadarBreakdown(country: string): CountryRadarBreakdown {
+    const sub = "(SELECT site_id FROM sites WHERE country = ?)";
+    const byType = getDb().prepare(`
+      SELECT COALESCE(NULLIF(radar_type, ''), 'Unknown') AS key, COUNT(*) AS count
+      FROM radars WHERE site_id IN ${sub}
+      GROUP BY key ORDER BY count DESC LIMIT 12
+    `).all(country) as Array<{ key: string; count: number }>;
+    const byBand = getDb().prepare(`
+      SELECT COALESCE(NULLIF(frequency_band, ''), 'Unknown') AS key, COUNT(*) AS count
+      FROM radars WHERE site_id IN ${sub}
+      GROUP BY key ORDER BY count DESC LIMIT 12
+    `).all(country) as Array<{ key: string; count: number }>;
+    const topModels = getDb().prepare(`
+      SELECT COALESCE(NULLIF(radar_model, ''), 'Unknown') AS key, COUNT(*) AS count
+      FROM radars WHERE site_id IN ${sub}
+      GROUP BY key ORDER BY count DESC LIMIT 10
+    `).all(country) as Array<{ key: string; count: number }>;
+    return { by_type: byType, by_band: byBand, top_models: topModels };
+  }
+
+  getCountryActivityBreakdown(country: string): CountryActivityBreakdown {
+    const sub = "(SELECT site_id FROM sites WHERE country = ?)";
+    const byCat = getDb().prepare(`
+      SELECT COALESCE(NULLIF(activity_category, ''), 'Unknown') AS key, COUNT(*) AS count
+      FROM site_range_activities WHERE site_id IN ${sub}
+      GROUP BY key ORDER BY count DESC LIMIT 12
+    `).all(country) as Array<{ key: string; count: number }>;
+    const recent = getDb().prepare(`
+      SELECT a.activity_id, a.site_id, s.site_name,
+             a.activity_category, a.activity_description,
+             a.start_year, a.end_year, a.status
+      FROM site_range_activities a
+      JOIN sites s ON s.site_id = a.site_id
+      WHERE s.country = ?
+      ORDER BY COALESCE(a.start_year, 0) DESC, a.activity_id DESC
+      LIMIT 10
+    `).all(country) as CountryActivityBreakdown["recent"];
+    return { by_category: byCat, recent };
+  }
+
+  getCountryContacts(country: string): CountryContactRow[] {
+    const db = getDb();
+    const sub = "(SELECT site_id FROM sites WHERE country = ?)";
+
+    // Layer 3 user-managed site_contacts
+    const a = db.prepare(`
+      SELECT 'site_contact' AS source,
+             CAST(sc.id AS TEXT) AS ref_id,
+             sc.full_name, sc.organization, NULL AS contact_type,
+             sc.email, sc.phone, sc.site_id, s.site_name
+      FROM site_contacts sc
+      JOIN sites s ON s.site_id = sc.site_id
+      WHERE sc.site_id IN ${sub}
+    `).all(country) as CountryContactRow[];
+
+    // Layer 1 Excel-imported contacts
+    const b = db.prepare(`
+      SELECT 'imported_contact' AS source,
+             c.contact_id AS ref_id,
+             COALESCE(c.organization_name, '(Unknown)') AS full_name,
+             c.organization_name AS organization,
+             c.contact_type, c.contact_email AS email, c.contact_phone AS phone,
+             c.site_id, s.site_name
+      FROM contacts c
+      JOIN sites s ON s.site_id = c.site_id
+      WHERE c.site_id IN ${sub}
+    `).all(country) as CountryContactRow[];
+
+    // CRM contacts whose site_id falls in this country
+    const c = db.prepare(`
+      SELECT 'crm_contact' AS source,
+             CAST(cc.id AS TEXT) AS ref_id,
+             cc.full_name, cc.organization_name AS organization,
+             cc.contact_type, cc.email, cc.phone,
+             cc.site_id, s.site_name
+      FROM crm_contacts cc
+      JOIN sites s ON s.site_id = cc.site_id
+      WHERE cc.site_id IS NOT NULL AND cc.site_id IN ${sub}
+    `).all(country) as CountryContactRow[];
+
+    return [...a, ...b, ...c].sort((x, y) =>
+      (x.organization ?? "").localeCompare(y.organization ?? "")
+      || x.full_name.localeCompare(y.full_name)
+    );
+  }
+
+  getCountrySources(country: string): CountrySourceRow[] {
+    // Aggregate all sources cited from any site, radar, or activity in
+    // this country, plus citation strings that contain SRC- ids.
+    const db = getDb();
+    const ids = new Map<string, number>();
+    const bump = (id?: string | null) => {
+      if (!id) return;
+      const trimmed = id.trim();
+      if (!/^SRC-/.test(trimmed)) return;
+      ids.set(trimmed, (ids.get(trimmed) ?? 0) + 1);
+    };
+
+    const sub = "(SELECT site_id FROM sites WHERE country = ?)";
+
+    // 1. Direct source_id columns on radars / activities / contacts
+    for (const r of (db.prepare(`SELECT source_id, citations FROM radars WHERE site_id IN ${sub}`).all(country) as Array<{ source_id?: string; citations?: string }>)) {
+      bump(r.source_id);
+      if (r.citations) for (const tok of r.citations.split(/[,\s]+/)) bump(tok);
+    }
+    for (const r of (db.prepare(`SELECT source_id FROM site_range_activities WHERE site_id IN ${sub}`).all(country) as Array<{ source_id?: string }>)) {
+      bump(r.source_id);
+    }
+    for (const r of (db.prepare(`SELECT source_id FROM contacts WHERE site_id IN ${sub}`).all(country) as Array<{ source_id?: string }>)) {
+      bump(r.source_id);
+    }
+
+    // 2. Sites' own citations text
+    for (const r of (db.prepare("SELECT citations FROM sites WHERE country = ?").all(country) as Array<{ citations?: string }>)) {
+      if (r.citations) for (const tok of r.citations.split(/[,\s]+/)) bump(tok);
+    }
+
+    if (ids.size === 0) return [];
+
+    const idList = Array.from(ids.keys());
+    const placeholders = idList.map(() => "?").join(",");
+    const rows = db.prepare(
+      `SELECT source_id, source_title, source_type, publisher FROM sources WHERE source_id IN (${placeholders})`
+    ).all(...idList) as Array<{ source_id: string; source_title: string; source_type?: string; publisher?: string }>;
+    const titleById = new Map(rows.map((r) => [r.source_id, r]));
+
+    return idList
+      .map((id) => {
+        const meta = titleById.get(id);
+        return {
+          source_id: id,
+          source_title: meta?.source_title ?? "(לא נמצא במאגר)",
+          source_type: meta?.source_type,
+          publisher: meta?.publisher,
+          citation_count: ids.get(id)!,
+        };
+      })
+      .sort((a, b) => b.citation_count - a.citation_count);
+  }
+
+  /** Convenience: build the whole CountryOverview in one shot. */
+  getCountryOverview(country: string): CountryOverview | null {
+    const meta = this.getCountryMeta(country);
+    if (!meta) return null;
+    return {
+      meta,
+      data_quality: this.getCountryDataQuality(country),
+      sites: this.getCountrySites(country),
+      radar_breakdown: this.getCountryRadarBreakdown(country),
+      activity_breakdown: this.getCountryActivityBreakdown(country),
+      contacts: this.getCountryContacts(country),
+      sources: this.getCountrySources(country),
+    };
   }
 
 
