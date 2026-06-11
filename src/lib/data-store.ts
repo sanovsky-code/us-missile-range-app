@@ -54,6 +54,9 @@ import {
   OpportunityDocument,
   OpportunityDocType,
   OPPORTUNITY_DOC_TYPES,
+  OpportunityFieldHistoryEntry,
+  OpportunityTrackedField,
+  OPPORTUNITY_TRACKED_FIELDS,
 } from "./types";
 import { getDb, getDbPath, transaction } from "./db";
 
@@ -1890,22 +1893,37 @@ class DataStore {
     // override later via update.
     const probability = input.probability ?? STAGE_PROBABILITY[input.stage];
 
-    const result = getDb().prepare(`
-      INSERT INTO opportunities (
-        name, site_id, stage, probability, amount, close_date, owner,
-        next_step, description, budget_confirmed, discovery_completed,
-        roi_analysis_completed, loss_reason, created_by
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(
-      input.name.trim(), input.site_id, input.stage, probability,
-      input.amount ?? null, norm(input.close_date), norm(input.owner),
-      norm(input.next_step), norm(input.description),
-      input.budget_confirmed ? 1 : 0,
-      input.discovery_completed ? 1 : 0,
-      input.roi_analysis_completed ? 1 : 0,
-      norm(input.loss_reason), norm(input.created_by),
-    );
-    return this.getOpportunity(Number(result.lastInsertRowid))!;
+    // Wrap the INSERT + history anchor in one transaction so the
+    // "__created__" marker can never go missing for a row that exists.
+    return transaction((db) => {
+      const result = db.prepare(`
+        INSERT INTO opportunities (
+          name, site_id, stage, probability, amount, close_date, owner,
+          next_step, description, budget_confirmed, discovery_completed,
+          roi_analysis_completed, loss_reason, created_by
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(
+        input.name.trim(), input.site_id, input.stage, probability,
+        input.amount ?? null, norm(input.close_date), norm(input.owner),
+        norm(input.next_step), norm(input.description),
+        input.budget_confirmed ? 1 : 0,
+        input.discovery_completed ? 1 : 0,
+        input.roi_analysis_completed ? 1 : 0,
+        norm(input.loss_reason), norm(input.created_by),
+      );
+      const id = Number(result.lastInsertRowid);
+      // Sentinel "__created__" row. The UI renders this differently —
+      // "ההזדמנות נוצרה" with stage/amount summary instead of Field/Old/New.
+      const summary = `Stage: ${input.stage}` +
+        (input.amount !== undefined ? `; Amount: $${input.amount}` : "") +
+        (input.owner ? `; Owner: ${input.owner}` : "");
+      db.prepare(`
+        INSERT INTO opportunity_field_history (
+          opportunity_id, field_name, old_value, new_value, changed_by
+        ) VALUES (?, '__created__', NULL, ?, ?)
+      `).run(id, summary, norm(input.created_by));
+      return this.getOpportunity(id)!;
+    });
   }
 
   updateOpportunity(id: number, patch: Partial<{
@@ -1935,43 +1953,96 @@ class DataStore {
       if (!ok) throw new Error(`Site "${patch.site_id}" not found`);
     }
 
-    const updates: string[] = [];
-    const params: unknown[] = [];
-    if (patch.name !== undefined) { updates.push("name = ?"); params.push(patch.name.trim()); }
-    if (patch.site_id !== undefined) { updates.push("site_id = ?"); params.push(patch.site_id); }
+    // Compute the effective patch: the cascading stage→probability rule
+    // matters for history too — if the operator changed Stage without
+    // touching Probability, the auto-bumped Probability still gets a
+    // history row.
+    const effective: Record<string, unknown> = {};
+    if (patch.name !== undefined) effective.name = patch.name.trim();
+    if (patch.site_id !== undefined) effective.site_id = patch.site_id;
     if (patch.stage !== undefined) {
-      updates.push("stage = ?"); params.push(patch.stage);
-      // If the caller didn't simultaneously override probability, snap it to
-      // the new stage default. This matches Salesforce behavior: stage change
-      // updates probability unless the operator has explicitly set one.
+      effective.stage = patch.stage;
       if (patch.probability === undefined) {
-        updates.push("probability = ?");
-        params.push(STAGE_PROBABILITY[patch.stage]);
+        effective.probability = STAGE_PROBABILITY[patch.stage];
       }
     }
-    if (patch.probability !== undefined) {
-      updates.push("probability = ?");
-      params.push(patch.probability);
-    }
-    if (patch.amount !== undefined) { updates.push("amount = ?"); params.push(patch.amount); }
-    if (patch.close_date !== undefined) { updates.push("close_date = ?"); params.push(norm(patch.close_date)); }
-    if (patch.owner !== undefined) { updates.push("owner = ?"); params.push(norm(patch.owner)); }
-    if (patch.next_step !== undefined) { updates.push("next_step = ?"); params.push(norm(patch.next_step)); }
-    if (patch.description !== undefined) { updates.push("description = ?"); params.push(norm(patch.description)); }
-    if (patch.budget_confirmed !== undefined) { updates.push("budget_confirmed = ?"); params.push(patch.budget_confirmed ? 1 : 0); }
-    if (patch.discovery_completed !== undefined) { updates.push("discovery_completed = ?"); params.push(patch.discovery_completed ? 1 : 0); }
-    if (patch.roi_analysis_completed !== undefined) { updates.push("roi_analysis_completed = ?"); params.push(patch.roi_analysis_completed ? 1 : 0); }
-    if (patch.loss_reason !== undefined) { updates.push("loss_reason = ?"); params.push(norm(patch.loss_reason)); }
+    if (patch.probability !== undefined) effective.probability = patch.probability;
+    if (patch.amount !== undefined) effective.amount = patch.amount;
+    if (patch.close_date !== undefined) effective.close_date = norm(patch.close_date);
+    if (patch.owner !== undefined) effective.owner = norm(patch.owner);
+    if (patch.next_step !== undefined) effective.next_step = norm(patch.next_step);
+    if (patch.description !== undefined) effective.description = norm(patch.description);
+    if (patch.budget_confirmed !== undefined) effective.budget_confirmed = patch.budget_confirmed ? 1 : 0;
+    if (patch.discovery_completed !== undefined) effective.discovery_completed = patch.discovery_completed ? 1 : 0;
+    if (patch.roi_analysis_completed !== undefined) effective.roi_analysis_completed = patch.roi_analysis_completed ? 1 : 0;
+    if (patch.loss_reason !== undefined) effective.loss_reason = norm(patch.loss_reason);
 
-    if (updates.length === 0) return existing;
-    updates.push("updated_at = CURRENT_TIMESTAMP");
-    if (patch.updated_by !== undefined) {
-      updates.push("updated_by = ?");
-      params.push(norm(patch.updated_by));
-    }
-    params.push(id);
-    getDb().prepare(`UPDATE opportunities SET ${updates.join(", ")} WHERE id = ?`).run(...params);
-    return this.getOpportunity(id);
+    if (Object.keys(effective).length === 0) return existing;
+
+    return transaction((db) => {
+      const updates: string[] = [];
+      const params: unknown[] = [];
+      for (const [k, v] of Object.entries(effective)) {
+        updates.push(`${k} = ?`);
+        params.push(v);
+      }
+      updates.push("updated_at = CURRENT_TIMESTAMP");
+      if (patch.updated_by !== undefined) {
+        updates.push("updated_by = ?");
+        params.push(norm(patch.updated_by));
+      }
+      params.push(id);
+      db.prepare(`UPDATE opportunities SET ${updates.join(", ")} WHERE id = ?`).run(...params);
+
+      // Diff the tracked fields and write one history row per real change.
+      // Booleans are normalized to 0/1 on both sides so "true → 1" doesn't
+      // get logged as a spurious change.
+      const stmt = db.prepare(`
+        INSERT INTO opportunity_field_history (
+          opportunity_id, field_name, old_value, new_value, changed_by
+        ) VALUES (?, ?, ?, ?, ?)
+      `);
+      const existingRaw: Record<OpportunityTrackedField, unknown> = {
+        name: existing.name,
+        site_id: existing.site_id,
+        stage: existing.stage,
+        probability: existing.probability ?? null,
+        amount: existing.amount ?? null,
+        close_date: existing.close_date ?? null,
+        owner: existing.owner ?? null,
+        next_step: existing.next_step ?? null,
+        description: existing.description ?? null,
+        budget_confirmed: existing.budget_confirmed ? 1 : 0,
+        discovery_completed: existing.discovery_completed ? 1 : 0,
+        roi_analysis_completed: existing.roi_analysis_completed ? 1 : 0,
+        loss_reason: existing.loss_reason ?? null,
+      };
+      for (const field of OPPORTUNITY_TRACKED_FIELDS) {
+        if (!(field in effective)) continue;
+        const oldVal = existingRaw[field];
+        const newVal = effective[field];
+        if (oldVal === newVal) continue;
+        // Coalesce nullish to empty string for comparison so NULL→NULL no-ops
+        // (rare but happens when normalizing whitespace) are also skipped.
+        if ((oldVal ?? "") === (newVal ?? "")) continue;
+        stmt.run(
+          id, field,
+          oldVal === null || oldVal === undefined ? null : String(oldVal),
+          newVal === null || newVal === undefined ? null : String(newVal),
+          norm(patch.updated_by),
+        );
+      }
+      return this.getOpportunity(id);
+    });
+  }
+
+  /** Append-only field-history feed for an opportunity, newest first.
+   * Includes the "__created__" sentinel row as the lifecycle anchor. */
+  listOpportunityHistory(opportunityId: number): OpportunityFieldHistoryEntry[] {
+    return getDb()
+      .prepare(`SELECT * FROM opportunity_field_history WHERE opportunity_id = ?
+                ORDER BY datetime(changed_at) DESC, id DESC`)
+      .all(opportunityId) as OpportunityFieldHistoryEntry[];
   }
 
   deleteOpportunity(id: number): boolean {

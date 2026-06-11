@@ -584,6 +584,57 @@ export interface OpportunityDocument {
   created_at: string;
 }
 
+/** One row of the Salesforce-style "Field History Tracking" log for an
+ * Opportunity. field_name="__created__" is the lifecycle anchor written
+ * by createOpportunity(); all other rows are diffs produced by
+ * updateOpportunity(). Append-only. */
+export interface OpportunityFieldHistoryEntry {
+  id: number;
+  opportunity_id: number;
+  field_name: string;
+  old_value?: string;
+  new_value?: string;
+  changed_by?: string;
+  changed_at: string;
+}
+
+/** Which Opportunity columns get diffed into the field-history log on
+ * UPDATE. Kept as a constant tuple so TypeScript can narrow the keys and
+ * the data-store loop stays in sync with the Hebrew label map below. */
+export const OPPORTUNITY_TRACKED_FIELDS = [
+  "name",
+  "site_id",
+  "stage",
+  "probability",
+  "amount",
+  "close_date",
+  "owner",
+  "next_step",
+  "description",
+  "budget_confirmed",
+  "discovery_completed",
+  "roi_analysis_completed",
+  "loss_reason",
+] as const;
+export type OpportunityTrackedField = (typeof OPPORTUNITY_TRACKED_FIELDS)[number];
+
+/** Hebrew display labels for tracked fields, used by the history card. */
+export const OPPORTUNITY_FIELD_LABELS_HE: Record<OpportunityTrackedField, string> = {
+  name: "שם",
+  site_id: "אתר",
+  stage: "Stage",
+  probability: "Probability",
+  amount: "Amount",
+  close_date: "Close Date",
+  owner: "Owner",
+  next_step: "Next Step",
+  description: "תיאור",
+  budget_confirmed: "תקציב מאושר",
+  discovery_completed: "Discovery הושלם",
+  roi_analysis_completed: "ניתוח ROI הושלם",
+  loss_reason: "Loss Reason",
+};
+
 export interface FilterState {
   search: string;
   countries: string[];

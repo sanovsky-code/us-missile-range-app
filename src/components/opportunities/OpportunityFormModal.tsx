@@ -27,9 +27,18 @@ interface Props {
   onSaved: (saved: Opportunity) => void;
 }
 
+const OPERATOR_LS_KEY = "opportunity.operator_name";
+
 export default function OpportunityFormModal({ mode, initial, onClose, onSaved }: Props) {
   const [sites, setSites] = useState<SiteOption[] | null>(null);
   const [country, setCountry] = useState<string>(initial?.country ?? "");
+  // Persisted across sessions so the operator doesn't retype their name on
+  // every edit. Stored client-side only — the server still treats it as a
+  // string attribution, not authentication.
+  const [operator, setOperator] = useState<string>("");
+  useEffect(() => {
+    try { setOperator(localStorage.getItem(OPERATOR_LS_KEY) ?? ""); } catch {}
+  }, []);
   const [form, setForm] = useState<Partial<Opportunity>>(() => ({
     name: "",
     site_id: "",
@@ -113,6 +122,10 @@ export default function OpportunityFormModal({ mode, initial, onClose, onSaved }
     try {
       const url = mode === "create" ? "/api/opportunities" : `/api/opportunities/${initial!.id}`;
       const method = mode === "create" ? "POST" : "PATCH";
+      const trimmedOperator = operator.trim();
+      // Persist for the next session even if it's a blank-out — that's the
+      // operator explicitly clearing their attribution.
+      try { localStorage.setItem(OPERATOR_LS_KEY, trimmedOperator); } catch {}
       const payload: Record<string, unknown> = {
         name: form.name?.trim(),
         site_id: form.site_id,
@@ -127,6 +140,12 @@ export default function OpportunityFormModal({ mode, initial, onClose, onSaved }
         discovery_completed: !!form.discovery_completed,
         roi_analysis_completed: !!form.roi_analysis_completed,
         loss_reason: form.loss_reason?.trim() || null,
+        // The server routes both fields to the same column path; we always
+        // send the one that matches the mode so older API consumers don't
+        // need to special-case it.
+        ...(mode === "create"
+          ? { created_by: trimmedOperator || undefined }
+          : { updated_by: trimmedOperator || undefined }),
       };
       const res = await fetch(url, {
         method, headers: { "Content-Type": "application/json" },
@@ -377,7 +396,19 @@ export default function OpportunityFormModal({ mode, initial, onClose, onSaved }
           </section>
         </div>
 
-        <div className="flex items-center justify-end gap-2 px-5 py-3 border-t bg-gray-50">
+        <div className="flex items-center justify-between gap-2 px-5 py-3 border-t bg-gray-50 flex-wrap">
+          <label className="text-xs text-gray-600 flex items-center gap-2">
+            שונה על־ידי:
+            <input
+              type="text"
+              value={operator}
+              onChange={(e) => setOperator(e.target.value)}
+              placeholder="שם (נשמר במכשיר)"
+              className="px-2 py-1 text-sm border border-gray-200 rounded w-44"
+              dir="auto"
+            />
+          </label>
+          <div className="flex items-center gap-2">
           <button
             onClick={onClose}
             disabled={busy}
@@ -393,6 +424,7 @@ export default function OpportunityFormModal({ mode, initial, onClose, onSaved }
             {busy && <Loader2 className="w-4 h-4 animate-spin" />}
             {mode === "create" ? "צור הזדמנות" : "שמור שינויים"}
           </button>
+          </div>
         </div>
       </div>
     </div>

@@ -25,6 +25,7 @@ import { STAGE_HEBREW } from "@/lib/types";
 import OpportunityActivityTimeline from "@/components/opportunities/OpportunityActivityTimeline";
 import OpportunityDocumentsCard from "@/components/opportunities/OpportunityDocumentsCard";
 import OpportunityFormModal from "@/components/opportunities/OpportunityFormModal";
+import OpportunityHistoryCard from "@/components/opportunities/OpportunityHistoryCard";
 
 function stageBadgeClass(stage: OpportunityStage): string {
   switch (stage) {
@@ -153,10 +154,9 @@ export default function OpportunityDetailPage({ params }: { params: Promise<{ id
       </div>
 
       <div className="max-w-7xl mx-auto px-6 py-6 grid grid-cols-1 lg:grid-cols-12 gap-6 lg:items-start">
-        <aside className="lg:col-span-4 lg:order-first">
-          <div className="lg:sticky lg:top-[180px]">
-            <OpportunityActivityTimeline opportunityId={oppId} />
-          </div>
+        <aside className="lg:col-span-4 lg:order-first space-y-4">
+          <OpportunityActivityTimeline opportunityId={oppId} />
+          <OpportunityHistoryCard opportunityId={oppId} />
         </aside>
 
         <div className="lg:col-span-8 space-y-4">

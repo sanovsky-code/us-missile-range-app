@@ -373,6 +373,29 @@ CREATE TABLE IF NOT EXISTS opportunity_documents (
 );
 CREATE INDEX IF NOT EXISTS idx_opp_documents_opp_id ON opportunity_documents(opportunity_id);
 
+-- Salesforce-style Field History Tracking. Every UPDATE on opportunities
+-- diffs the changed columns and writes one row per modified field, in the
+-- same transaction as the UPDATE itself. Append-only — never PATCH or
+-- DELETE existing rows from app code; ON DELETE CASCADE only fires when
+-- the parent opportunity is removed.
+--
+-- The sentinel field_name "__created__" marks the lifecycle anchor written
+-- by createOpportunity(); the UI renders it as "ההזדמנות נוצרה" instead of
+-- the Field/Old/New triple.
+CREATE TABLE IF NOT EXISTS opportunity_field_history (
+  id              INTEGER PRIMARY KEY AUTOINCREMENT,
+  opportunity_id  INTEGER NOT NULL,
+  field_name      TEXT NOT NULL,
+  old_value       TEXT,
+  new_value       TEXT,
+  changed_by      TEXT,
+  changed_at      TEXT DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (opportunity_id) REFERENCES opportunities(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_opp_field_history_opp_id ON opportunity_field_history(opportunity_id);
+CREATE INDEX IF NOT EXISTS idx_opp_field_history_field ON opportunity_field_history(field_name);
+CREATE INDEX IF NOT EXISTS idx_opp_field_history_changed_at ON opportunity_field_history(changed_at);
+
 -- Per-country hide list. Sites whose country appears here vanish from
 -- the map, the search autocomplete, the favorites list, and the
 -- Management task feed — but their data and audit history are preserved.
