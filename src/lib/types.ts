@@ -232,6 +232,83 @@ export interface SiteTimelineActivityWithSite extends SiteTimelineActivity {
   country: string;
 }
 
+// --- Salesforce-style standalone Contacts module ---------------------------
+//
+// Distinct from the existing `Contact` (Excel-imported per-site) and
+// `SiteContact` (per-site user CRUD) types. CrmContact is an
+// organization-level record managed from the /contacts tab.
+
+export const CRM_CONTACT_TYPES = [
+  "Customer",
+  "Partner",
+  "Vendor",
+  "Public Affairs",
+  "Media",
+  "Internal",
+  "Other",
+] as const;
+export type CrmContactType = (typeof CRM_CONTACT_TYPES)[number];
+
+export interface CrmContact {
+  id: number;
+  salutation?: string;
+  full_name: string;
+  title?: string;
+  organization_name?: string;
+  contact_type?: string;
+  email?: string;
+  phone?: string;
+  mobile?: string;
+  contact_url?: string;
+  department?: string;
+  reports_to?: string;
+  owner?: string;
+  site_id?: string;
+  mailing_address?: string;
+  notes?: string;
+  source_id?: string;
+  created_by?: string;
+  created_at: string;
+  updated_by?: string;
+  updated_at?: string;
+  /** Set on the detail page response only — joined Site name for display. */
+  site_name?: string;
+}
+
+/** Row shape returned by the list endpoint. Keeps the payload small. */
+export interface CrmContactListItem {
+  id: number;
+  full_name: string;
+  organization_name?: string;
+  contact_type?: string;
+  email?: string;
+  phone?: string;
+  mobile?: string;
+  title?: string;
+  owner?: string;
+  site_id?: string;
+  site_name?: string;
+}
+
+/** Timeline row for a contact (Comment / Task / Task Update / Call). Same
+ * shape as SiteTimelineActivity but with contact_id as the parent. */
+export interface ContactTimelineActivity {
+  id: number;
+  contact_id: number;
+  activity_type: ActivityType | "Call";   // "Call" is a contact-only addition
+  subject: string;
+  body?: string;
+  status?: TaskStatus;
+  priority?: TaskPriority;
+  due_date?: string;
+  assigned_to?: string;
+  created_by?: string;
+  created_at: string;
+  updated_at?: string;
+  completed_at?: string;
+  parent_activity_id?: number;
+}
+
 export interface FilterState {
   search: string;
   countries: string[];

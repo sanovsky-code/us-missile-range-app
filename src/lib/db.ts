@@ -230,6 +230,69 @@ CREATE TABLE IF NOT EXISTS site_contacts (
 CREATE INDEX IF NOT EXISTS idx_site_contacts_site_id ON site_contacts(site_id);
 CREATE INDEX IF NOT EXISTS idx_site_contacts_email ON site_contacts(email);
 
+-- Salesforce-style standalone Contacts module. Distinct from:
+--   * contacts          (Layer 1 Excel-imported public-affairs offices)
+--   * site_contacts     (Layer 3 per-site user-managed)
+-- This table holds organization-level contacts the operator manages from
+-- the /contacts tab. site_id is optional — a contact may be linked to one
+-- of the existing sites (Salesforce "Account") or stand alone.
+CREATE TABLE IF NOT EXISTS crm_contacts (
+  id                INTEGER PRIMARY KEY AUTOINCREMENT,
+  salutation        TEXT,
+  full_name         TEXT NOT NULL,
+  title             TEXT,
+  organization_name TEXT,
+  contact_type      TEXT,
+  email             TEXT,
+  phone             TEXT,
+  mobile            TEXT,
+  contact_url       TEXT,
+  department        TEXT,
+  reports_to        TEXT,
+  owner             TEXT,
+  site_id           TEXT,
+  mailing_address   TEXT,
+  notes             TEXT,
+  source_id         TEXT,
+  created_by        TEXT,
+  created_at        TEXT DEFAULT CURRENT_TIMESTAMP,
+  updated_by        TEXT,
+  updated_at        TEXT,
+  FOREIGN KEY (site_id) REFERENCES sites(site_id) ON DELETE SET NULL
+);
+CREATE INDEX IF NOT EXISTS idx_crm_contacts_organization_name ON crm_contacts(organization_name);
+CREATE INDEX IF NOT EXISTS idx_crm_contacts_email ON crm_contacts(email);
+CREATE INDEX IF NOT EXISTS idx_crm_contacts_site_id ON crm_contacts(site_id);
+CREATE INDEX IF NOT EXISTS idx_crm_contacts_full_name ON crm_contacts(full_name);
+
+-- Per-contact Salesforce-style timeline (Comments, Tasks, Task Updates,
+-- Call logs). Mirrors the structure of site_timeline_activities; the two
+-- live in separate tables because a row never belongs to both a site and
+-- a contact. parent_activity_id chains Task Update rows back to their
+-- original Task so status-change history is preserved.
+CREATE TABLE IF NOT EXISTS contact_timeline_activities (
+  id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+  contact_id          INTEGER NOT NULL,
+  activity_type       TEXT NOT NULL,
+  subject             TEXT NOT NULL,
+  body                TEXT,
+  status              TEXT,
+  priority            TEXT,
+  due_date            TEXT,
+  assigned_to         TEXT,
+  created_by          TEXT,
+  created_at          TEXT DEFAULT CURRENT_TIMESTAMP,
+  updated_at          TEXT,
+  completed_at        TEXT,
+  parent_activity_id  INTEGER,
+  FOREIGN KEY (contact_id) REFERENCES crm_contacts(id) ON DELETE CASCADE,
+  FOREIGN KEY (parent_activity_id) REFERENCES contact_timeline_activities(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_contact_timeline_activities_contact_id ON contact_timeline_activities(contact_id);
+CREATE INDEX IF NOT EXISTS idx_contact_timeline_activities_type ON contact_timeline_activities(activity_type);
+CREATE INDEX IF NOT EXISTS idx_contact_timeline_activities_parent ON contact_timeline_activities(parent_activity_id);
+CREATE INDEX IF NOT EXISTS idx_contact_timeline_activities_created_at ON contact_timeline_activities(created_at);
+
 -- Per-user favorite Sites. Lightweight pointer table; no Site data is
 -- duplicated. The UNIQUE(site_id) constraint keeps "add favorite" idempotent
 -- and is what makes a single site_id appear at most once in the list. The

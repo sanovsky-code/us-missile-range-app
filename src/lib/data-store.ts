@@ -30,6 +30,9 @@ import {
   TASK_PRIORITIES,
   SiteContact,
   FavoriteSiteListItem,
+  CrmContact,
+  CrmContactListItem,
+  ContactTimelineActivity,
 } from "./types";
 import { getDb, getDbPath, transaction } from "./db";
 
@@ -38,6 +41,14 @@ import { getDb, getDbPath, transaction } from "./db";
 
 function toUndef<T>(v: T | null | undefined): T | undefined {
   return v === null || v === undefined ? undefined : v;
+}
+
+/** Trim a string and turn empty into NULL for SQLite columns. Used by the
+ * CRM-contact CRUD so blank inputs don't insert empty strings. */
+function norm(v: string | undefined | null): string | null {
+  if (v === undefined || v === null) return null;
+  const s = v.trim();
+  return s === "" ? null : s;
 }
 
 function rowToSite(row: Record<string, unknown>): Site {
@@ -1030,6 +1041,220 @@ class DataStore {
         open_task_count: Number(r.open_task_count ?? 0),
       };
     });
+  }
+
+
+  // --- CRM Contacts (Salesforce-style standalone contacts) ----------------
+  //
+  // Organization-level contacts managed from the /contacts tab. Optionally
+  // linked to a Site via site_id (Salesforce "Account"). Distinct from
+  // site_contacts (per-site) and the Excel-imported contacts table.
+
+  listCrmContacts(): CrmContactListItem[] {
+    return getDb().prepare(`
+      SELECT c.id, c.full_name, c.organization_name, c.contact_type,
+             c.email, c.phone, c.mobile, c.title, c.owner, c.site_id,
+             s.site_name AS site_name
+      FROM crm_contacts c
+      LEFT JOIN sites s ON s.site_id = c.site_id
+      ORDER BY COALESCE(c.organization_name, '~') ASC, c.full_name ASC
+    `).all() as CrmContactListItem[];
+  }
+
+  getCrmContact(id: number): CrmContact | null {
+    const row = getDb().prepare(`
+      SELECT c.*, s.site_name AS site_name
+      FROM crm_contacts c
+      LEFT JOIN sites s ON s.site_id = c.site_id
+      WHERE c.id = ?
+    `).get(id) as CrmContact | undefined;
+    return row ?? null;
+  }
+
+  createCrmContact(input: Partial<CrmContact> & { full_name: string; created_by?: string }): CrmContact {
+    if (!input.full_name || !input.full_name.trim()) {
+      throw new Error("full_name is required");
+    }
+    if (input.site_id) {
+      const ok = getDb().prepare("SELECT 1 FROM sites WHERE site_id = ?").get(input.site_id);
+      if (!ok) throw new Error(`Site "${input.site_id}" not found`);
+    }
+    const result = getDb().prepare(`
+      INSERT INTO crm_contacts (
+        salutation, full_name, title, organization_name, contact_type,
+        email, phone, mobile, contact_url, department, reports_to, owner,
+        site_id, mailing_address, notes, source_id, created_by
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      norm(input.salutation), input.full_name.trim(), norm(input.title),
+      norm(input.organization_name), norm(input.contact_type),
+      norm(input.email), norm(input.phone), norm(input.mobile),
+      norm(input.contact_url), norm(input.department), norm(input.reports_to),
+      norm(input.owner), norm(input.site_id), norm(input.mailing_address),
+      norm(input.notes), norm(input.source_id), norm(input.created_by),
+    );
+    return this.getCrmContact(Number(result.lastInsertRowid))!;
+  }
+
+  updateCrmContact(id: number, patch: Partial<CrmContact> & { updated_by?: string }): CrmContact | null {
+    const existing = this.getCrmContact(id);
+    if (!existing) return null;
+    const fields: Array<keyof CrmContact> = [
+      "salutation","full_name","title","organization_name","contact_type",
+      "email","phone","mobile","contact_url","department","reports_to","owner",
+      "site_id","mailing_address","notes","source_id",
+    ];
+    const updates: string[] = [];
+    const params: unknown[] = [];
+    for (const f of fields) {
+      if (patch[f] === undefined) continue;
+      updates.push(`${f} = ?`);
+      params.push(norm(patch[f] as string | undefined));
+    }
+    if (patch.full_name !== undefined && (!patch.full_name || !patch.full_name.trim())) {
+      throw new Error("full_name cannot be empty");
+    }
+    if (patch.site_id) {
+      const ok = getDb().prepare("SELECT 1 FROM sites WHERE site_id = ?").get(patch.site_id);
+      if (!ok) throw new Error(`Site "${patch.site_id}" not found`);
+    }
+    if (updates.length === 0) return existing;
+    updates.push("updated_at = CURRENT_TIMESTAMP");
+    if (patch.updated_by !== undefined) {
+      updates.push("updated_by = ?");
+      params.push(norm(patch.updated_by));
+    }
+    params.push(id);
+    getDb().prepare(`UPDATE crm_contacts SET ${updates.join(", ")} WHERE id = ?`).run(...params);
+    return this.getCrmContact(id);
+  }
+
+  deleteCrmContact(id: number): boolean {
+    // ON DELETE CASCADE removes child timeline rows.
+    const r = getDb().prepare("DELETE FROM crm_contacts WHERE id = ?").run(id);
+    return r.changes > 0;
+  }
+
+
+  // --- Contact timeline activities ----------------------------------------
+  //
+  // Per-contact Comment / Task / Task Update / Call rows. Mirrors
+  // listActivitiesForSite + friends, but writes to contact_timeline_activities.
+
+  listActivitiesForContact(contactId: number, type?: string): ContactTimelineActivity[] {
+    if (type) {
+      return getDb()
+        .prepare(`SELECT * FROM contact_timeline_activities
+                  WHERE contact_id = ? AND activity_type = ?
+                  ORDER BY datetime(created_at) DESC, id DESC`)
+        .all(contactId, type) as ContactTimelineActivity[];
+    }
+    return getDb()
+      .prepare(`SELECT * FROM contact_timeline_activities WHERE contact_id = ?
+                ORDER BY datetime(created_at) DESC, id DESC`)
+      .all(contactId) as ContactTimelineActivity[];
+  }
+
+  getContactActivityById(id: number): ContactTimelineActivity | null {
+    const row = getDb().prepare("SELECT * FROM contact_timeline_activities WHERE id = ?").get(id);
+    return (row as ContactTimelineActivity | undefined) ?? null;
+  }
+
+  createContactActivity(input: {
+    contact_id: number;
+    activity_type: string;
+    subject: string;
+    body?: string;
+    status?: TaskStatus;
+    priority?: TaskPriority;
+    due_date?: string;
+    assigned_to?: string;
+    created_by?: string;
+    parent_activity_id?: number;
+  }): ContactTimelineActivity {
+    if (!input.subject || !input.subject.trim()) {
+      throw new Error("subject is required");
+    }
+    const contactExists = getDb().prepare("SELECT 1 FROM crm_contacts WHERE id = ?").get(input.contact_id);
+    if (!contactExists) throw new Error(`Contact ${input.contact_id} not found`);
+
+    let status: TaskStatus | null = null;
+    let priority: TaskPriority | null = null;
+    if (input.activity_type === "Task") {
+      status = input.status && TASK_STATUSES.includes(input.status) ? input.status : "Open";
+      priority = input.priority && TASK_PRIORITIES.includes(input.priority) ? input.priority : "Medium";
+    } else if (input.status && TASK_STATUSES.includes(input.status)) {
+      status = input.status;
+    }
+
+    const result = getDb().prepare(`
+      INSERT INTO contact_timeline_activities (
+        contact_id, activity_type, subject, body, status, priority, due_date,
+        assigned_to, created_by, parent_activity_id
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      input.contact_id, input.activity_type, input.subject.trim(),
+      input.body?.trim() || null, status, priority, input.due_date || null,
+      input.assigned_to || null, input.created_by || null,
+      input.parent_activity_id ?? null,
+    );
+    return this.getContactActivityById(Number(result.lastInsertRowid))!;
+  }
+
+  updateContactActivity(id: number, patch: Partial<{
+    subject: string;
+    body: string;
+    status: TaskStatus;
+    priority: TaskPriority;
+    due_date: string | null;
+    assigned_to: string | null;
+    created_by: string | null;
+  }>): ContactTimelineActivity | null {
+    const existing = this.getContactActivityById(id);
+    if (!existing) return null;
+    if (patch.status && !TASK_STATUSES.includes(patch.status)) {
+      throw new Error(`Invalid status: ${patch.status}`);
+    }
+    if (patch.priority && !TASK_PRIORITIES.includes(patch.priority)) {
+      throw new Error(`Invalid priority: ${patch.priority}`);
+    }
+    const isTask = existing.activity_type === "Task";
+    const statusChanged = isTask && patch.status !== undefined && patch.status !== existing.status;
+
+    return transaction((db) => {
+      const updates: string[] = [];
+      const params: unknown[] = [];
+      if (patch.subject !== undefined) { updates.push("subject = ?"); params.push(patch.subject.trim()); }
+      if (patch.body !== undefined) { updates.push("body = ?"); params.push(patch.body?.trim() || null); }
+      if (patch.status !== undefined) { updates.push("status = ?"); params.push(patch.status); }
+      if (patch.priority !== undefined) { updates.push("priority = ?"); params.push(patch.priority); }
+      if (patch.due_date !== undefined) { updates.push("due_date = ?"); params.push(patch.due_date || null); }
+      if (patch.assigned_to !== undefined) { updates.push("assigned_to = ?"); params.push(patch.assigned_to || null); }
+      if (statusChanged && patch.status === "Done") updates.push("completed_at = CURRENT_TIMESTAMP");
+      if (statusChanged && existing.status === "Done" && patch.status !== "Done") updates.push("completed_at = NULL");
+      if (updates.length === 0) return existing;
+      updates.push("updated_at = CURRENT_TIMESTAMP");
+      params.push(id);
+      db.prepare(`UPDATE contact_timeline_activities SET ${updates.join(", ")} WHERE id = ?`).run(...params);
+
+      if (statusChanged) {
+        db.prepare(`
+          INSERT INTO contact_timeline_activities (
+            contact_id, activity_type, subject, body, parent_activity_id, created_by
+          ) VALUES (?, 'Task Update', ?, ?, ?, ?)
+        `).run(
+          existing.contact_id, "Task status changed",
+          `Status changed from ${existing.status ?? "(unset)"} to ${patch.status}.`,
+          id, patch.created_by ?? null,
+        );
+      }
+      return this.getContactActivityById(id);
+    });
+  }
+
+  deleteContactActivity(id: number): boolean {
+    const r = getDb().prepare("DELETE FROM contact_timeline_activities WHERE id = ?").run(id);
+    return r.changes > 0;
   }
 
 
