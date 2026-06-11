@@ -14,7 +14,7 @@
  * limited to the SRC-ids referenced by those ticked rows.
  */
 import { useMemo, useState } from "react";
-import { Upload, FileSpreadsheet, Loader2, ArrowRight, ArrowLeft, CheckCircle2, AlertTriangle } from "lucide-react";
+import { Upload, FileSpreadsheet, Loader2, ArrowRight, ArrowLeft, CheckCircle2, AlertTriangle, Download } from "lucide-react";
 import StepIndicator, { Step } from "@/components/import/StepIndicator";
 import SiteChangeTree from "@/components/import/SiteChangeTree";
 import SourceConflictPanel from "@/components/import/SourceConflictPanel";
@@ -206,6 +206,23 @@ export default function ImportWizardPage() {
                 )}
               </div>
             </label>
+
+            {/* Template helper. Surfaced here so first-time operators can
+                start from a known-good schema instead of guessing column
+                names. The endpoint streams data/import-template.xlsx. */}
+            <div className="mt-4 flex items-center justify-between gap-3 px-3 py-2.5 bg-blue-50 border border-blue-100 rounded-md text-sm">
+              <span className="text-gray-700">
+                אין לך תבנית? הורד את התבנית הרשמית עם כל העמודות וערכי הברירה.
+              </span>
+              <a
+                href="/api/import-template"
+                download="LapamRanges-import-template.xlsx"
+                className="inline-flex items-center gap-1 px-3 py-1.5 bg-white border border-blue-200 hover:bg-blue-100 text-blue-700 rounded-md text-xs font-medium"
+              >
+                <Download className="w-3.5 h-3.5" /> הורד תבנית ייבוא
+              </a>
+            </div>
+
             <div className="mt-6">
               <button
                 disabled={!file || busy}

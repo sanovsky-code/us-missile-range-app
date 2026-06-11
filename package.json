@@ -10,6 +10,7 @@
     "db:init": "tsx scripts/init-db.ts",
     "db:import": "tsx scripts/import-excel-to-sqlite.ts",
     "import:excel": "tsx scripts/import-excel-update.ts",
+    "build:template": "tsx scripts/build-import-template.ts",
     "build:dist": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-distribution.ps1"
   },
   "dependencies": {
