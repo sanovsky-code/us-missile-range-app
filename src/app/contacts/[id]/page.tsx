@@ -59,30 +59,33 @@ export default function ContactDetailPage({ params }: { params: Promise<{ id: st
 
   if (loading && !contact) {
     return (
-      <main className="min-h-screen bg-gray-50 p-6" dir="rtl">
+      <div className="flex-1 overflow-y-auto bg-gray-50 p-6" dir="rtl">
         <div className="flex justify-center py-16"><Loader2 className="w-8 h-8 animate-spin text-gray-400" /></div>
-      </main>
+      </div>
     );
   }
   if (!contact) {
     return (
-      <main className="min-h-screen bg-gray-50 p-6" dir="rtl">
+      <div className="flex-1 overflow-y-auto bg-gray-50 p-6" dir="rtl">
         <div className="max-w-3xl mx-auto bg-white border border-gray-200 rounded-xl p-8 text-center">
           <p className="text-gray-700">{error ?? "איש הקשר לא נמצא."}</p>
           <Link href="/contacts" className="inline-flex items-center gap-1 mt-3 text-blue-700 hover:underline">
             <ArrowRight className="w-4 h-4" /> חזרה לאנשי קשר
           </Link>
         </div>
-      </main>
+      </div>
     );
   }
 
   const display = (contact.salutation ? contact.salutation + " " : "") + contact.full_name;
 
   return (
-    <main className="min-h-screen bg-gray-50 pb-12" dir="rtl">
-      {/* Sticky top header — title row + summary row + actions */}
-      <div className="bg-white border-b border-gray-200">
+    // Same scroll pattern as /management — opt into a per-page scroll
+    // context because the root <main> is overflow-hidden.
+    <div className="flex-1 overflow-y-auto bg-gray-50 pb-12" dir="rtl">
+      {/* Sticky top header — title row + summary row + actions. Stays
+         visible while the operator scrolls through the cards below. */}
+      <div className="bg-white border-b border-gray-200 sticky top-0 z-20 shadow-sm">
         <div className="max-w-7xl mx-auto px-6 py-4">
           <nav className="text-xs text-gray-500 mb-2 flex items-center gap-1">
             <Link href="/contacts" className="hover:text-blue-700">אנשי קשר</Link>
@@ -121,9 +124,11 @@ export default function ContactDetailPage({ params }: { params: Promise<{ id: st
 
       {/* Two-column body */}
       <div className="max-w-7xl mx-auto px-6 py-6 grid grid-cols-1 lg:grid-cols-12 gap-6 lg:items-start">
-        {/* Sidebar (sticky on desktop) — Activity timeline */}
+        {/* Sidebar (sticky on desktop) — Activity timeline. top offset
+           lands the sidebar just below the now-sticky page header so the
+           two don't overlap when the operator scrolls. */}
         <aside className="lg:col-span-4 lg:order-first">
-          <div className="lg:sticky lg:top-4">
+          <div className="lg:sticky lg:top-[180px]">
             <ContactActivityTimeline contactId={contactId} />
           </div>
         </aside>
@@ -163,7 +168,7 @@ export default function ContactDetailPage({ params }: { params: Promise<{ id: st
           onSaved={async () => { setEditing(false); await reload(); }}
         />
       )}
-    </main>
+    </div>
   );
 }
 

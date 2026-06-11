@@ -42,7 +42,9 @@ export default function ContactsListPage() {
   }, [contacts, query]);
 
   return (
-    <main className="min-h-screen bg-gray-50" dir="rtl">
+    // The root layout's <main> is overflow-hidden so per-page wrappers must
+    // opt into their own scroll context — same pattern as /management.
+    <div className="flex-1 overflow-y-auto bg-gray-50" dir="rtl">
       <div className="max-w-7xl mx-auto p-6">
         <header className="flex items-center justify-between mb-4 flex-wrap gap-3">
           <div className="flex items-center gap-2">
@@ -161,6 +163,6 @@ export default function ContactsListPage() {
           }}
         />
       )}
-    </main>
+    </div>
   );
 }
