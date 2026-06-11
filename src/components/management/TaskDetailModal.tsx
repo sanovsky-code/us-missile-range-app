@@ -17,8 +17,8 @@
  */
 import { useEffect, useState } from "react";
 import Link from "next/link";
-import { Loader2, X, ExternalLink, History, Calendar, User, Building2, CheckCircle2, AlertCircle, Check } from "lucide-react";
-import type { SiteTimelineActivity, TaskStatus, TaskPriority } from "@/lib/types";
+import { Loader2, X, ExternalLink, History, Calendar, User, Building2, Users, CheckCircle2, AlertCircle, Check } from "lucide-react";
+import type { SiteTimelineActivity, TaskStatus, TaskPriority, TaskParentKind } from "@/lib/types";
 import { TASK_STATUSES, TASK_PRIORITIES } from "@/lib/types";
 
 const STATUS_HEBREW: Record<TaskStatus, string> = {
@@ -41,11 +41,17 @@ const STATUS_CLS: Record<TaskStatus, string> = {
 
 interface Props {
   activityId: number;
-  /** Site context shown next to the task. Passed in from the Management
-   * row so we don't need to look it up again here. */
-  siteId: string;
-  siteName: string;
-  country?: string;
+  /** Whether this task lives in site_timeline_activities (open from a Site)
+   * or contact_timeline_activities (open from a CRM Contact). Drives the
+   * API endpoint base, the parent link href, and the origin badge. */
+  kind: TaskParentKind;
+  /** Parent identifier — site_id for kind="site", stringified contact id
+   * for kind="contact". */
+  parentId: string;
+  /** Parent display name — site_name or contact full_name. */
+  parentName: string;
+  /** Secondary parent label — country for sites, organization for contacts. */
+  parentSubtitle?: string;
   onClose: () => void;
   /** Called after the operator changes status inside the modal so the
    * parent page can re-fetch its task list. */
@@ -58,8 +64,15 @@ interface DetailResponse {
 }
 
 export default function TaskDetailModal({
-  activityId, siteId, siteName, country, onClose, onChanged,
+  activityId, kind, parentId, parentName, parentSubtitle, onClose, onChanged,
 }: Props) {
+  // Resolve the API base + parent navigation href from the kind. Both
+  // backends expose the same { activity, history } shape on GET and the
+  // same PATCH body schema, so the rest of the modal is identical.
+  const apiBase = kind === "site" ? "/api/activities" : "/api/contact-activities";
+  const parentHref = kind === "site" ? `/site/${parentId}` : `/contacts/${parentId}`;
+  const parentIcon = kind === "site" ? <Building2 className="w-3 h-3" /> : <Users className="w-3 h-3" />;
+  const originLabel = kind === "site" ? "אתר" : "איש קשר";
   const [data, setData] = useState<DetailResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [updating, setUpdating] = useState(false);
@@ -72,7 +85,7 @@ export default function TaskDetailModal({
     setLoading(true);
     setError(null);
     try {
-      const res = await fetch(`/api/activities/${activityId}`, { cache: "no-store" });
+      const res = await fetch(`${apiBase}/${activityId}`, { cache: "no-store" });
       const json = await res.json();
       if (!res.ok) throw new Error(json.error ?? `HTTP ${res.status}`);
       setData(json);
@@ -99,7 +112,7 @@ export default function TaskDetailModal({
     setUpdating(true);
     setError(null);
     try {
-      const res = await fetch(`/api/activities/${activityId}`, {
+      const res = await fetch(`${apiBase}/${activityId}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(patch),
@@ -149,7 +162,7 @@ export default function TaskDetailModal({
     const draft = assignedDraft.trim();
     const current = (data?.activity.assigned_to ?? "").trim();
     if (data && draft !== current) {
-      fetch(`/api/activities/${activityId}`, {
+      fetch(`${apiBase}/${activityId}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ assigned_to: draft || null }),
@@ -188,14 +201,18 @@ export default function TaskDetailModal({
             <div className="flex items-center gap-2 text-xs text-gray-500 mb-1">
               <span className="font-mono">#{activityId}</span>
               <span>·</span>
+              <span className={
+                "inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-semibold " +
+                (kind === "site" ? "bg-blue-50 text-blue-700" : "bg-purple-50 text-purple-700")
+              }>{originLabel}</span>
               <Link
-                href={`/site/${siteId}`}
+                href={parentHref}
                 className="inline-flex items-center gap-1 text-blue-600 hover:text-blue-800 hover:underline"
-                dir="ltr"
+                dir="auto"
               >
-                <Building2 className="w-3 h-3" />
-                {siteName}
-                {country && <span className="text-gray-400">({country})</span>}
+                {parentIcon}
+                {parentName}
+                {parentSubtitle && <span className="text-gray-400">({parentSubtitle})</span>}
                 <ExternalLink className="w-3 h-3" />
               </Link>
             </div>
@@ -383,11 +400,11 @@ export default function TaskDetailModal({
         {/* Footer */}
         <footer className="flex items-center justify-end gap-2 px-6 py-3 border-t border-gray-200 bg-gray-50/50">
           <Link
-            href={`/site/${siteId}#timeline`}
+            href={kind === "site" ? `${parentHref}#timeline` : parentHref}
             className="inline-flex items-center gap-1 px-3 py-1.5 text-xs bg-white border border-gray-200 hover:border-blue-300 hover:text-blue-700 rounded-md text-gray-700"
           >
             <ExternalLink className="w-3.5 h-3.5" />
-            פתח באתר
+            {kind === "site" ? "פתח באתר" : "פתח באיש קשר"}
           </Link>
           <button
             type="button"

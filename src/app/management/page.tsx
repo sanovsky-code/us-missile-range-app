@@ -2,9 +2,9 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
-import { ClipboardList, Loader2, ExternalLink, CheckCircle2, ArrowUp, ArrowDown, ArrowUpDown } from "lucide-react";
+import { ClipboardList, Loader2, ExternalLink, CheckCircle2, ArrowUp, ArrowDown, ArrowUpDown, Building2, Users } from "lucide-react";
 import {
-  SiteTimelineActivityWithSite, TASK_STATUSES, TASK_PRIORITIES, TaskStatus, TaskPriority,
+  UnifiedTaskRow, TaskParentKind, TASK_STATUSES, TASK_PRIORITIES, TaskStatus, TaskPriority,
 } from "@/lib/types";
 import TaskDetailModal from "@/components/management/TaskDetailModal";
 
@@ -43,21 +43,27 @@ function formatDate(iso?: string): string {
 }
 
 export default function ManagementPage() {
-  const [tasks, setTasks] = useState<SiteTimelineActivityWithSite[]>([]);
+  // Unified rows: tasks from BOTH site_timeline_activities and
+  // contact_timeline_activities, tagged with `parent_type`.
+  const [tasks, setTasks] = useState<UnifiedTaskRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [showCompleted, setShowCompleted] = useState(false);
   const [statusFilter, setStatusFilter] = useState<TaskStatus | "All">("All");
   const [priorityFilter, setPriorityFilter] = useState<TaskPriority | "All">("All");
-  const [siteFilter, setSiteFilter] = useState<string>("All");
-  // Which task is open in the detail modal (null = closed). We keep the
-  // site context alongside the id so the modal can render the site link
-  // without an extra round-trip.
+  const [parentFilter, setParentFilter] = useState<string>("All");      // "All" | parent_type:parent_id
+  const [originFilter, setOriginFilter] = useState<TaskParentKind | "All">("All");
+  // Which task is open in the detail modal (null = closed). The modal is
+  // polymorphic over parent kind, so we keep the full parent context here.
   const [openTask, setOpenTask] = useState<{
-    id: number; site_id: string; site_name: string; country?: string;
+    id: number;
+    kind: TaskParentKind;
+    parent_id: string;
+    parent_name: string;
+    parent_subtitle?: string;
   } | null>(null);
   // Column sort state. null = the API's default order (due-date ascending
   // with nulls last). Clicking a header cycles: asc → desc → null.
-  type SortKey = "subject" | "site_name" | "priority" | "due_date" | "assigned_to" | "status";
+  type SortKey = "subject" | "parent_name" | "priority" | "due_date" | "assigned_to" | "status";
   type SortDir = "asc" | "desc";
   const [sort, setSort] = useState<{ key: SortKey; dir: SortDir } | null>(null);
 
@@ -88,8 +94,15 @@ export default function ManagementPage() {
 
   useEffect(() => { reload(); }, [reload]);
 
-  const changeStatus = async (id: number, status: TaskStatus) => {
-    await fetch(`/api/activities/${id}`, {
+  // PATCH endpoint depends on whether the row belongs to a site or a contact.
+  const patchUrl = (t: UnifiedTaskRow) => (
+    t.parent_type === "site"
+      ? `/api/activities/${t.id}`
+      : `/api/contact-activities/${t.id}`
+  );
+
+  const changeStatus = async (t: UnifiedTaskRow, status: TaskStatus) => {
+    await fetch(patchUrl(t), {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ status }),
@@ -97,20 +110,25 @@ export default function ManagementPage() {
     await reload();
   };
 
-  const markDone = (id: number) => changeStatus(id, "Done");
+  const markDone = (t: UnifiedTaskRow) => changeStatus(t, "Done");
 
   const filtered = useMemo(() => {
     let list = tasks;
     if (statusFilter !== "All") list = list.filter((t) => t.status === statusFilter);
     if (priorityFilter !== "All") list = list.filter((t) => t.priority === priorityFilter);
-    if (siteFilter !== "All") list = list.filter((t) => t.site_id === siteFilter);
+    if (originFilter !== "All") list = list.filter((t) => t.parent_type === originFilter);
+    if (parentFilter !== "All") {
+      // parentFilter encodes "type:id" so two entities with the same id but
+      // different kinds (rare but possible) stay distinct.
+      list = list.filter((t) => `${t.parent_type}:${t.parent_id}` === parentFilter);
+    }
     if (!sort) return list;
     // Priority and status get domain orderings instead of alphabetical.
     // Empty/null values always sink to the bottom regardless of direction
     // so the rows the user is missing data on don't dominate the top.
     const priorityRank: Record<TaskPriority, number> = { Low: 0, Medium: 1, High: 2 };
     const statusRank: Record<TaskStatus, number> = { Open: 0, "In Progress": 1, Done: 2, Cancelled: 3 };
-    const compare = (a: SiteTimelineActivityWithSite, b: SiteTimelineActivityWithSite): number => {
+    const compare = (a: UnifiedTaskRow, b: UnifiedTaskRow): number => {
       const dir = sort.dir === "asc" ? 1 : -1;
       const nullsLast = (av: unknown, bv: unknown): number | null => {
         const aEmpty = av === null || av === undefined || av === "";
@@ -121,8 +139,8 @@ export default function ManagementPage() {
         return null;
       };
       switch (sort.key) {
-        case "subject":     return dir * (a.subject ?? "").localeCompare(b.subject ?? "", "he");
-        case "site_name":   return dir * (a.site_name ?? "").localeCompare(b.site_name ?? "", "he");
+        case "subject":      return dir * (a.subject ?? "").localeCompare(b.subject ?? "", "he");
+        case "parent_name":  return dir * (a.parent_name ?? "").localeCompare(b.parent_name ?? "", "he");
         case "assigned_to": {
           const ne = nullsLast(a.assigned_to, b.assigned_to);
           if (ne !== null) return ne;
@@ -146,7 +164,7 @@ export default function ManagementPage() {
       }
     };
     return [...list].sort(compare);
-  }, [tasks, statusFilter, priorityFilter, siteFilter, sort]);
+  }, [tasks, statusFilter, priorityFilter, originFilter, parentFilter, sort]);
 
   const counts = useMemo(() => {
     const c: Record<TaskStatus, number> = { "Open": 0, "In Progress": 0, "Done": 0, "Cancelled": 0 };
@@ -154,11 +172,20 @@ export default function ManagementPage() {
     return c;
   }, [tasks]);
 
-  const sites = useMemo(() => {
-    const seen = new Map<string, string>();
-    for (const t of tasks) seen.set(t.site_id, t.site_name);
-    return Array.from(seen.entries()).sort((a, b) => a[1].localeCompare(b[1]));
+  // Unique parents across both kinds. Encoded as "type:id" so the dropdown
+  // value stays globally unique even if a site and a contact share a number.
+  const parents = useMemo(() => {
+    const seen = new Map<string, { kind: TaskParentKind; name: string }>();
+    for (const t of tasks) {
+      const key = `${t.parent_type}:${t.parent_id}`;
+      if (!seen.has(key)) seen.set(key, { kind: t.parent_type, name: t.parent_name });
+    }
+    return Array.from(seen.entries()).sort((a, b) => a[1].name.localeCompare(b[1].name, "he"));
   }, [tasks]);
+  const visibleParents = useMemo(
+    () => originFilter === "All" ? parents : parents.filter(([, v]) => v.kind === originFilter),
+    [parents, originFilter],
+  );
 
   return (
     <div className="flex-1 overflow-auto bg-gray-50">
@@ -219,15 +246,32 @@ export default function ManagementPage() {
             </select>
           </div>
           <div className="flex items-center gap-2">
-            <label className="text-sm text-gray-600">אתר:</label>
+            <label className="text-sm text-gray-600">מקור:</label>
             <select
-              value={siteFilter}
-              onChange={(e) => setSiteFilter(e.target.value)}
+              value={originFilter}
+              onChange={(e) => {
+                setOriginFilter(e.target.value as TaskParentKind | "All");
+                setParentFilter("All");   // reset parent filter when origin changes
+              }}
+              className="text-sm border border-gray-200 rounded-md px-2 py-1.5 bg-white"
+            >
+              <option value="All">הכל</option>
+              <option value="site">אתרים</option>
+              <option value="contact">אנשי קשר</option>
+            </select>
+          </div>
+          <div className="flex items-center gap-2">
+            <label className="text-sm text-gray-600">
+              {originFilter === "contact" ? "איש קשר:" : originFilter === "site" ? "אתר:" : "אתר / איש קשר:"}
+            </label>
+            <select
+              value={parentFilter}
+              onChange={(e) => setParentFilter(e.target.value)}
               className="text-sm border border-gray-200 rounded-md px-2 py-1.5 bg-white max-w-xs"
             >
               <option value="All">הכל</option>
-              {sites.map(([id, name]) => (
-                <option key={id} value={id}>{name}</option>
+              {visibleParents.map(([key, v]) => (
+                <option key={key} value={key}>{v.name}</option>
               ))}
             </select>
           </div>
@@ -247,22 +291,41 @@ export default function ManagementPage() {
             <table className="w-full text-sm">
               <thead>
                 <tr className="bg-gray-50 border-b border-gray-200">
-                  <SortHeader label="כותרת"   sortKey="subject"     sort={sort} onToggle={toggleSort} />
-                  <SortHeader label="אתר"     sortKey="site_name"   sort={sort} onToggle={toggleSort} />
-                  <SortHeader label="עדיפות"  sortKey="priority"    sort={sort} onToggle={toggleSort} />
-                  <SortHeader label="יעד"     sortKey="due_date"    sort={sort} onToggle={toggleSort} />
-                  <SortHeader label="משויך"   sortKey="assigned_to" sort={sort} onToggle={toggleSort} />
-                  <SortHeader label="סטטוס"   sortKey="status"      sort={sort} onToggle={toggleSort} />
+                  <SortHeader label="כותרת"            sortKey="subject"     sort={sort} onToggle={toggleSort} />
+                  <SortHeader label="אתר / איש קשר"  sortKey="parent_name" sort={sort} onToggle={toggleSort} />
+                  <SortHeader label="עדיפות"          sortKey="priority"    sort={sort} onToggle={toggleSort} />
+                  <SortHeader label="יעד"              sortKey="due_date"    sort={sort} onToggle={toggleSort} />
+                  <SortHeader label="משויך"           sortKey="assigned_to" sort={sort} onToggle={toggleSort} />
+                  <SortHeader label="סטטוס"           sortKey="status"      sort={sort} onToggle={toggleSort} />
                   <th className="text-right px-4 py-3 text-xs font-bold text-gray-600 uppercase">פעולה</th>
                 </tr>
               </thead>
               <tbody>
-                {filtered.map((t) => (
-                  <tr key={t.id} className="border-b border-gray-100 hover:bg-gray-50/50">
+                {filtered.map((t) => {
+                  const isContact = t.parent_type === "contact";
+                  const parentHref = isContact ? `/contacts/${t.parent_id}` : `/site/${t.parent_id}`;
+                  return (
+                  <tr key={`${t.parent_type}-${t.id}`} className="border-b border-gray-100 hover:bg-gray-50/50">
                     <td className="px-4 py-3">
+                      <div className="flex items-center gap-2 mb-0.5">
+                        {/* Origin badge — instantly identifies where the task came from. */}
+                        <span className={
+                          "inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-semibold " +
+                          (isContact ? "bg-purple-50 text-purple-700" : "bg-blue-50 text-blue-700")
+                        } title={isContact ? "משימה ממסך איש קשר" : "משימה ממסך אתר"}>
+                          {isContact ? <Users className="w-3 h-3" /> : <Building2 className="w-3 h-3" />}
+                          {isContact ? "איש קשר" : "אתר"}
+                        </span>
+                      </div>
                       <button
                         type="button"
-                        onClick={() => setOpenTask({ id: t.id, site_id: t.site_id, site_name: t.site_name, country: t.country })}
+                        onClick={() => setOpenTask({
+                          id: t.id,
+                          kind: t.parent_type,
+                          parent_id: t.parent_id,
+                          parent_name: t.parent_name,
+                          parent_subtitle: t.parent_subtitle,
+                        })}
                         className="font-medium text-gray-900 hover:text-blue-700 hover:underline text-right"
                         title="פתח פרטי משימה והיסטוריה"
                       >
@@ -274,15 +337,16 @@ export default function ManagementPage() {
                     </td>
                     <td className="px-4 py-3">
                       <Link
-                        href={`/site/${t.site_id}`}
+                        href={parentHref}
                         className="inline-flex items-center gap-1 text-blue-600 hover:text-blue-800 hover:underline"
-                        dir="ltr"
-                        style={{ textAlign: "left" }}
+                        dir="auto"
                       >
-                        {t.site_name}
+                        {t.parent_name}
                         <ExternalLink className="w-3 h-3" />
                       </Link>
-                      <p className="text-xs text-gray-500" dir="ltr" style={{ textAlign: "left" }}>{t.country}</p>
+                      {t.parent_subtitle && (
+                        <p className="text-xs text-gray-500" dir="auto">{t.parent_subtitle}</p>
+                      )}
                     </td>
                     <td className="px-4 py-3">
                       {t.priority && (
@@ -297,7 +361,7 @@ export default function ManagementPage() {
                       {t.status && (
                         <select
                           value={t.status}
-                          onChange={(e) => changeStatus(t.id, e.target.value as TaskStatus)}
+                          onChange={(e) => changeStatus(t, e.target.value as TaskStatus)}
                           className={`text-xs px-2 py-1 rounded-md border ${STATUS_CLS[t.status]} cursor-pointer`}
                         >
                           {TASK_STATUSES.map((s) => (
@@ -309,7 +373,7 @@ export default function ManagementPage() {
                     <td className="px-4 py-3">
                       {t.status !== "Done" && t.status !== "Cancelled" && (
                         <button
-                          onClick={() => markDone(t.id)}
+                          onClick={() => markDone(t)}
                           className="inline-flex items-center gap-1 px-2 py-1 text-xs text-green-700 bg-green-50 hover:bg-green-100 rounded-md border border-green-200"
                           title="סמן כהושלם"
                         >
@@ -318,7 +382,8 @@ export default function ManagementPage() {
                       )}
                     </td>
                   </tr>
-                ))}
+                  );
+                })}
               </tbody>
             </table>
           )}
@@ -328,9 +393,10 @@ export default function ManagementPage() {
       {openTask && (
         <TaskDetailModal
           activityId={openTask.id}
-          siteId={openTask.site_id}
-          siteName={openTask.site_name}
-          country={openTask.country}
+          kind={openTask.kind}
+          parentId={openTask.parent_id}
+          parentName={openTask.parent_name}
+          parentSubtitle={openTask.parent_subtitle}
           onClose={() => setOpenTask(null)}
           onChanged={reload}
         />
@@ -349,7 +415,7 @@ export default function ManagementPage() {
  *   asc       → desc
  *   desc      → null (default order)
  */
-type _SortKey = "subject" | "site_name" | "priority" | "due_date" | "assigned_to" | "status";
+type _SortKey = "subject" | "parent_name" | "priority" | "due_date" | "assigned_to" | "status";
 
 function SortHeader({
   label, sortKey, sort, onToggle,

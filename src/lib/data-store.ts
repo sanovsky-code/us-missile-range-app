@@ -33,6 +33,8 @@ import {
   CrmContact,
   CrmContactListItem,
   ContactTimelineActivity,
+  UnifiedTaskRow,
+  TaskParentKind,
 } from "./types";
 import { getDb, getDbPath, transaction } from "./db";
 
@@ -853,43 +855,115 @@ class DataStore {
   }
 
   /**
-   * Tasks across every site, joined with the site name + country. The
-   * Management page calls this. Defaults to active tasks only.
+   * Unified task list for the Management page. UNIONs:
+   *   - site_timeline_activities (parent = site, parent_subtitle = country)
+   *   - contact_timeline_activities (parent = contact, parent_subtitle = org)
+   *
+   * Each row carries a `parent_type` discriminator so the UI can render the
+   * right origin badge, link to the right detail page, and open the right
+   * task-detail modal flavor. Defaults to active tasks only.
    */
   listAllTaskActivities(filters?: {
     status?: TaskStatus[];
     priority?: TaskPriority[];
-    site_id?: string;
-  }): SiteTimelineActivityWithSite[] {
-    const where: string[] = ["a.activity_type = 'Task'"];
-    const params: unknown[] = [];
-
+    parent_type?: TaskParentKind;
+    /** Either a site_id or a stringified contact id, depending on
+     * parent_type. The Management page exposes this through the unified
+     * parent filter dropdown. */
+    parent_id?: string;
+  }): UnifiedTaskRow[] {
     const statuses = filters?.status && filters.status.length > 0
       ? filters.status
       : (["Open", "In Progress"] as TaskStatus[]);
-    where.push(`a.status IN (${statuses.map(() => "?").join(",")})`);
-    params.push(...statuses);
+    const statusPlaceholders = statuses.map(() => "?").join(",");
+
+    // Build the per-source WHERE pieces. Status filter applies to both
+    // branches; priority too. The parent filter applies to the branch that
+    // matches the requested parent_type (and excludes the other branch).
+    const siteParams: unknown[] = [...statuses];
+    const contactParams: unknown[] = [...statuses];
+    let siteWhere = `activity_type = 'Task' AND status IN (${statusPlaceholders})`;
+    let contactWhere = `activity_type = 'Task' AND status IN (${statusPlaceholders})`;
 
     if (filters?.priority && filters.priority.length > 0) {
-      where.push(`a.priority IN (${filters.priority.map(() => "?").join(",")})`);
-      params.push(...filters.priority);
-    }
-    if (filters?.site_id) {
-      where.push("a.site_id = ?");
-      params.push(filters.site_id);
+      const ph = filters.priority.map(() => "?").join(",");
+      siteWhere    += ` AND priority IN (${ph})`;
+      contactWhere += ` AND priority IN (${ph})`;
+      siteParams.push(...filters.priority);
+      contactParams.push(...filters.priority);
     }
 
+    // parent_type filters out one branch entirely. parent_id narrows the
+    // surviving branch.
+    let includeSite = true;
+    let includeContact = true;
+    if (filters?.parent_type === "site") includeContact = false;
+    if (filters?.parent_type === "contact") includeSite = false;
+
+    if (filters?.parent_id) {
+      if (filters.parent_type === "site") {
+        // a.site_id qualifier — sites.site_id is the joined column, so an
+        // unqualified site_id is ambiguous.
+        siteWhere += " AND a.site_id = ?";
+        siteParams.push(filters.parent_id);
+      } else if (filters.parent_type === "contact") {
+        const cid = Number(filters.parent_id);
+        if (Number.isFinite(cid)) {
+          contactWhere += " AND a.contact_id = ?";
+          contactParams.push(cid);
+        }
+      }
+    }
+
+    const branches: string[] = [];
+    const allParams: unknown[] = [];
+
+    if (includeSite) {
+      branches.push(`
+        SELECT
+          a.id, 'site' AS parent_type, a.site_id AS parent_id,
+          s.site_name AS parent_name, s.country AS parent_subtitle,
+          a.activity_type, a.subject, a.body, a.status, a.priority,
+          a.due_date, a.assigned_to, a.created_by, a.created_at,
+          a.updated_at, a.completed_at
+        FROM site_timeline_activities a
+        JOIN sites s ON s.site_id = a.site_id
+        WHERE ${siteWhere}
+      `);
+      allParams.push(...siteParams);
+    }
+
+    if (includeContact) {
+      branches.push(`
+        SELECT
+          a.id, 'contact' AS parent_type, CAST(a.contact_id AS TEXT) AS parent_id,
+          c.full_name AS parent_name, c.organization_name AS parent_subtitle,
+          a.activity_type, a.subject, a.body, a.status, a.priority,
+          a.due_date, a.assigned_to, a.created_by, a.created_at,
+          a.updated_at, a.completed_at
+        FROM contact_timeline_activities a
+        JOIN crm_contacts c ON c.id = a.contact_id
+        WHERE ${contactWhere}
+      `);
+      allParams.push(...contactParams);
+    }
+
+    if (branches.length === 0) return [];
+
+    // Wrap the UNION in a subquery so the outer ORDER BY operates on the
+    // merged projection — SQLite otherwise reports "ambiguous column name"
+    // when it tries to resolve `id` / `due_date` against the unmerged
+    // inner SELECTs.
     const sql = `
-      SELECT a.*, s.site_name AS site_name, s.country AS country
-      FROM site_timeline_activities a
-      JOIN sites s ON s.site_id = a.site_id
-      WHERE ${where.join(" AND ")}
+      SELECT * FROM (
+        ${branches.join("\nUNION ALL\n")}
+      ) AS unified
       ORDER BY
-        datetime(a.due_date) IS NULL,
-        datetime(a.due_date) ASC,
-        a.id DESC
+        datetime(due_date) IS NULL,
+        datetime(due_date) ASC,
+        id DESC
     `;
-    return getDb().prepare(sql).all(...params) as SiteTimelineActivityWithSite[];
+    return getDb().prepare(sql).all(...allParams) as UnifiedTaskRow[];
   }
 
   // --- Site contacts ------------------------------------------------------

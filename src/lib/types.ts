@@ -232,6 +232,43 @@ export interface SiteTimelineActivityWithSite extends SiteTimelineActivity {
   country: string;
 }
 
+/**
+ * One row in the unified task list shown on the Management page.
+ *
+ * Tasks live in two parallel tables — site_timeline_activities (per-site
+ * Salesforce timeline) and contact_timeline_activities (per-contact
+ * Salesforce timeline). The Management page UNIONs them so the operator
+ * sees every open task regardless of which parent it belongs to. The
+ * `parent_type` discriminator lets the UI render the right badge,
+ * navigate to the right detail page, and open the right modal.
+ */
+export type TaskParentKind = "site" | "contact";
+
+export interface UnifiedTaskRow {
+  id: number;
+  parent_type: TaskParentKind;
+  /** site_id for a site task, stringified contact id for a contact task. */
+  parent_id: string;
+  /** site_name for a site task, full_name for a contact task. */
+  parent_name: string;
+  /** Country (sites) OR organization_name (contacts). Used as a secondary
+   * line under the parent name in the Management table. */
+  parent_subtitle?: string;
+
+  // Task columns (same shape as the timeline activities)
+  activity_type: "Task";
+  subject: string;
+  body?: string;
+  status?: TaskStatus;
+  priority?: TaskPriority;
+  due_date?: string;
+  assigned_to?: string;
+  created_by?: string;
+  created_at: string;
+  updated_at?: string;
+  completed_at?: string;
+}
+
 // --- Salesforce-style standalone Contacts module ---------------------------
 //
 // Distinct from the existing `Contact` (Excel-imported per-site) and
