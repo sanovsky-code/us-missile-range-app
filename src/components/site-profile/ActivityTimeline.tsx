@@ -7,6 +7,7 @@ import {
 import {
   ActivityType, SiteTimelineActivity, TASK_PRIORITIES, TASK_STATUSES, TaskPriority, TaskStatus,
 } from "@/lib/types";
+import { useCurrentUser } from "@/lib/current-user";
 
 interface Props {
   siteId: string;
@@ -89,6 +90,7 @@ function ActivityIcon({ type }: { type: ActivityType }) {
 }
 
 export default function ActivityTimeline({ siteId }: Props) {
+  const { currentUser } = useCurrentUser();
   const [activities, setActivities] = useState<SiteTimelineActivity[]>([]);
   const [loading, setLoading] = useState(true);
   const [typeFilter, setTypeFilter] = useState<ActivityType | "all">("all");
@@ -143,6 +145,7 @@ export default function ActivityTimeline({ siteId }: Props) {
           activity_type: "Comment",
           subject: "Comment added",
           body: commentBody,
+          created_by: currentUser || undefined,
         }),
       });
       const data = await res.json();
@@ -170,6 +173,7 @@ export default function ActivityTimeline({ siteId }: Props) {
           priority: taskPriority,
           due_date: taskDueDate || undefined,
           assigned_to: taskAssignedTo || undefined,
+          created_by: currentUser || undefined,
         }),
       });
       const data = await res.json();
@@ -189,7 +193,7 @@ export default function ActivityTimeline({ siteId }: Props) {
     await fetch(`/api/activities/${id}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ status }),
+      body: JSON.stringify({ status, created_by: currentUser || undefined }),
     });
     await reload();
   };

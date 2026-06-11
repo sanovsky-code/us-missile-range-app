@@ -20,6 +20,7 @@ import Link from "next/link";
 import { Loader2, X, ExternalLink, History, Calendar, User, Building2, Users, CheckCircle2, AlertCircle, Check } from "lucide-react";
 import type { SiteTimelineActivity, TaskStatus, TaskPriority, TaskParentKind } from "@/lib/types";
 import { TASK_STATUSES, TASK_PRIORITIES } from "@/lib/types";
+import { useCurrentUser } from "@/lib/current-user";
 
 const STATUS_HEBREW: Record<TaskStatus, string> = {
   "Open": "פתוח",
@@ -66,6 +67,7 @@ interface DetailResponse {
 export default function TaskDetailModal({
   activityId, kind, parentId, parentName, parentSubtitle, onClose, onChanged,
 }: Props) {
+  const { currentUser } = useCurrentUser();
   // Resolve the API base + parent navigation href from the kind. Both
   // backends expose the same { activity, history } shape on GET and the
   // same PATCH body schema, so the rest of the modal is identical.
@@ -115,7 +117,7 @@ export default function TaskDetailModal({
       const res = await fetch(`${apiBase}/${activityId}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(patch),
+        body: JSON.stringify({ ...patch, created_by: currentUser || undefined }),
       });
       if (!res.ok) {
         const j = await res.json().catch(() => ({}));
@@ -165,7 +167,7 @@ export default function TaskDetailModal({
       fetch(`${apiBase}/${activityId}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ assigned_to: draft || null }),
+        body: JSON.stringify({ assigned_to: draft || null, created_by: currentUser || undefined }),
       }).then(() => onChanged?.()).catch(() => { /* swallow — modal is gone */ });
     }
     onClose();

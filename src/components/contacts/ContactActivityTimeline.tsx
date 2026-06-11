@@ -17,6 +17,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { MessageSquare, ClipboardList, Phone, History, Send, Plus, Loader2, X } from "lucide-react";
 import type { ContactTimelineActivity, TaskPriority, TaskStatus } from "@/lib/types";
 import { TASK_PRIORITIES, TASK_STATUSES } from "@/lib/types";
+import { useCurrentUser } from "@/lib/current-user";
 
 interface Props {
   contactId: number;
@@ -76,6 +77,7 @@ function fmtDate(iso?: string): string {
 }
 
 export default function ContactActivityTimeline({ contactId }: Props) {
+  const { currentUser } = useCurrentUser();
   const [activities, setActivities] = useState<ContactTimelineActivity[]>([]);
   const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState<FeedActivityType | "all">("all");
@@ -103,7 +105,7 @@ export default function ContactActivityTimeline({ contactId }: Props) {
     try {
       const res = await fetch(`/api/contact-activities/${id}`, {
         method: "PATCH", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ status }),
+        body: JSON.stringify({ status, created_by: currentUser || undefined }),
       });
       if (!res.ok) {
         const j = await res.json().catch(() => ({}));
@@ -268,6 +270,7 @@ function QuickAddForm({
   onCancel: () => void;
   onCreated: () => Promise<void>;
 }) {
+  const { currentUser } = useCurrentUser();
   const [subject, setSubject] = useState("");
   const [body, setBody] = useState("");
   const [priority, setPriority] = useState<TaskPriority>("Medium");
@@ -303,6 +306,7 @@ function QuickAddForm({
           priority: type === "Task" ? priority : undefined,
           due_date: type === "Task" ? (dueDate || undefined) : undefined,
           assigned_to: type === "Task" ? (assignedTo || undefined) : undefined,
+          created_by: currentUser || undefined,
         }),
       });
       if (!res.ok) {

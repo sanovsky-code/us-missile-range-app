@@ -19,6 +19,7 @@ import {
 } from "lucide-react";
 import type { OpportunityTimelineActivity, TaskPriority, TaskStatus } from "@/lib/types";
 import { TASK_PRIORITIES, TASK_STATUSES } from "@/lib/types";
+import { useCurrentUser } from "@/lib/current-user";
 
 interface Props {
   opportunityId: number;
@@ -91,6 +92,7 @@ function fmtEventTime(iso?: string): string {
 }
 
 export default function OpportunityActivityTimeline({ opportunityId }: Props) {
+  const { currentUser } = useCurrentUser();
   const [activities, setActivities] = useState<OpportunityTimelineActivity[]>([]);
   const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState<FeedActivityType | "all">("all");
@@ -118,7 +120,7 @@ export default function OpportunityActivityTimeline({ opportunityId }: Props) {
     try {
       const res = await fetch(`/api/opportunity-activities/${id}`, {
         method: "PATCH", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ status }),
+        body: JSON.stringify({ status, created_by: currentUser || undefined }),
       });
       if (!res.ok) {
         const j = await res.json().catch(() => ({}));
@@ -311,6 +313,7 @@ function QuickAddForm({
   onCancel: () => void;
   onCreated: () => Promise<void>;
 }) {
+  const { currentUser } = useCurrentUser();
   const [subject, setSubject] = useState("");
   const [body, setBody] = useState("");
   const [priority, setPriority] = useState<TaskPriority>("Medium");
@@ -358,6 +361,7 @@ function QuickAddForm({
           end_at: type === "Event" ? (endAt || undefined) : undefined,
           location: type === "Event" ? (location || undefined) : undefined,
           attendees: type === "Event" ? (attendees || undefined) : undefined,
+          created_by: currentUser || undefined,
         }),
       });
       if (!res.ok) {

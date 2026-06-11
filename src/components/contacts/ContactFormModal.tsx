@@ -14,6 +14,7 @@ import { Loader2, X, AlertCircle } from "lucide-react";
 import type { CrmContact } from "@/lib/types";
 import { CRM_CONTACT_TYPES } from "@/lib/types";
 import LookupField from "@/components/ui/LookupField";
+import { useCurrentUser } from "@/lib/current-user";
 
 interface SiteOption { site_id: string; site_name: string; country?: string; }
 interface SourceOption { source_id: string; source_title: string; source_type?: string; publisher?: string; }
@@ -28,6 +29,7 @@ interface Props {
 const SALUTATIONS = ["", "Mr.", "Mrs.", "Ms.", "Dr.", "Prof."];
 
 export default function ContactFormModal({ mode, initial, onClose, onSaved }: Props) {
+  const { currentUser } = useCurrentUser();
   const [form, setForm] = useState<Partial<CrmContact>>(() => ({
     salutation: "", first_name: "", last_name: "", title: "", organization_name: "",
     contact_type: "", email: "", phone: "", mobile: "", contact_url: "",
@@ -87,6 +89,10 @@ export default function ContactFormModal({ mode, initial, onClose, onSaved }: Pr
         if (typeof v === "string" && v.trim() === "") continue;
         if (v === undefined || v === null) continue;
         payload[k] = typeof v === "string" ? v.trim() : v;
+      }
+      // Attribution from the app-wide identity context.
+      if (currentUser) {
+        payload[mode === "create" ? "created_by" : "updated_by"] = currentUser;
       }
       const res = await fetch(url, {
         method, headers: { "Content-Type": "application/json" },

@@ -17,6 +17,7 @@ import { Loader2, X, AlertCircle, DollarSign, Calendar, User } from "lucide-reac
 import type { Opportunity, OpportunityStage } from "@/lib/types";
 import { OPPORTUNITY_STAGES, STAGE_HEBREW, STAGE_PROBABILITY } from "@/lib/types";
 import LookupField from "@/components/ui/LookupField";
+import { useCurrentUser } from "@/lib/current-user";
 
 interface SiteOption { site_id: string; site_name: string; country?: string; }
 
@@ -27,18 +28,10 @@ interface Props {
   onSaved: (saved: Opportunity) => void;
 }
 
-const OPERATOR_LS_KEY = "opportunity.operator_name";
-
 export default function OpportunityFormModal({ mode, initial, onClose, onSaved }: Props) {
+  const { currentUser } = useCurrentUser();
   const [sites, setSites] = useState<SiteOption[] | null>(null);
   const [country, setCountry] = useState<string>(initial?.country ?? "");
-  // Persisted across sessions so the operator doesn't retype their name on
-  // every edit. Stored client-side only — the server still treats it as a
-  // string attribution, not authentication.
-  const [operator, setOperator] = useState<string>("");
-  useEffect(() => {
-    try { setOperator(localStorage.getItem(OPERATOR_LS_KEY) ?? ""); } catch {}
-  }, []);
   const [form, setForm] = useState<Partial<Opportunity>>(() => ({
     name: "",
     site_id: "",
@@ -122,10 +115,7 @@ export default function OpportunityFormModal({ mode, initial, onClose, onSaved }
     try {
       const url = mode === "create" ? "/api/opportunities" : `/api/opportunities/${initial!.id}`;
       const method = mode === "create" ? "POST" : "PATCH";
-      const trimmedOperator = operator.trim();
-      // Persist for the next session even if it's a blank-out — that's the
-      // operator explicitly clearing their attribution.
-      try { localStorage.setItem(OPERATOR_LS_KEY, trimmedOperator); } catch {}
+      const attribution = currentUser?.trim() || undefined;
       const payload: Record<string, unknown> = {
         name: form.name?.trim(),
         site_id: form.site_id,
@@ -144,8 +134,8 @@ export default function OpportunityFormModal({ mode, initial, onClose, onSaved }
         // send the one that matches the mode so older API consumers don't
         // need to special-case it.
         ...(mode === "create"
-          ? { created_by: trimmedOperator || undefined }
-          : { updated_by: trimmedOperator || undefined }),
+          ? { created_by: attribution }
+          : { updated_by: attribution }),
       };
       const res = await fetch(url, {
         method, headers: { "Content-Type": "application/json" },
@@ -397,17 +387,10 @@ export default function OpportunityFormModal({ mode, initial, onClose, onSaved }
         </div>
 
         <div className="flex items-center justify-between gap-2 px-5 py-3 border-t bg-gray-50 flex-wrap">
-          <label className="text-xs text-gray-600 flex items-center gap-2">
-            שונה על־ידי:
-            <input
-              type="text"
-              value={operator}
-              onChange={(e) => setOperator(e.target.value)}
-              placeholder="שם (נשמר במכשיר)"
-              className="px-2 py-1 text-sm border border-gray-200 rounded w-44"
-              dir="auto"
-            />
-          </label>
+          <span className="text-xs text-gray-500">
+            השינוי יתועד תחת{" "}
+            <span className="font-medium text-gray-700" dir="auto">{currentUser || "—"}</span>
+          </span>
           <div className="flex items-center gap-2">
           <button
             onClick={onClose}

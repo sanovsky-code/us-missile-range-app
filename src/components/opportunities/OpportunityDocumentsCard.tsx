@@ -12,6 +12,7 @@ import { useCallback, useEffect, useState } from "react";
 import { FileText, ExternalLink, Plus, Loader2, Trash2 } from "lucide-react";
 import type { OpportunityDocument, OpportunityDocType } from "@/lib/types";
 import { OPPORTUNITY_DOC_TYPES } from "@/lib/types";
+import { useCurrentUser } from "@/lib/current-user";
 
 interface Props {
   opportunityId: number;
@@ -157,6 +158,7 @@ function DocForm({
   onCancel: () => void;
   onCreated: () => Promise<void>;
 }) {
+  const { currentUser } = useCurrentUser();
   const [title, setTitle] = useState("");
   const [url, setUrl] = useState("");
   const [docType, setDocType] = useState<OpportunityDocType | "">("");
@@ -176,6 +178,7 @@ function DocForm({
           url: url.trim(),
           doc_type: docType || undefined,
           notes: notes.trim() || undefined,
+          created_by: currentUser || undefined,
         }),
       });
       if (!res.ok) {

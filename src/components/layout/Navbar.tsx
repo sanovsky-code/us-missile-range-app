@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { Map, ClipboardList, Rocket, Upload, Star, Info, Users, Globe, Briefcase } from "lucide-react";
+import NavbarUserChip from "@/components/identity/NavbarUserChip";
 
 export default function Navbar() {
   const pathname = usePathname();
@@ -49,6 +50,8 @@ export default function Navbar() {
           </Link>
         ))}
       </div>
+
+      <NavbarUserChip />
     </nav>
   );
 }
