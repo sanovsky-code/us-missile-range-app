@@ -351,6 +351,33 @@ export default function ImportWizardPage() {
                   </div>
                 ))}
               </div>
+
+              {/* Wholesale-apply sheets (Radar_Lifecycle + Systems) — bulk
+                  upserted in the same transaction as the per-row diffed
+                  sheets, but without per-row wizard selection. */}
+              {applyReport.perWholesale && (
+                (applyReport.perWholesale.radar_lifecycle.inserted +
+                 applyReport.perWholesale.radar_lifecycle.updated +
+                 applyReport.perWholesale.radar_lifecycle.skipped +
+                 applyReport.perWholesale.systems.inserted +
+                 applyReport.perWholesale.systems.updated +
+                 applyReport.perWholesale.systems.skipped) > 0 && (
+                  <div className="mt-2 grid grid-cols-1 md:grid-cols-2 gap-2 text-sm">
+                    <div className="border border-sky-200 bg-sky-50/50 rounded-md p-2">
+                      <div className="text-xs text-sky-700 font-medium">מחזור חיים של ראדרים</div>
+                      <div className="text-gray-900">
+                        {applyReport.perWholesale.radar_lifecycle.inserted} חדשים · {applyReport.perWholesale.radar_lifecycle.updated} עודכנו · {applyReport.perWholesale.radar_lifecycle.skipped} דולגו
+                      </div>
+                    </div>
+                    <div className="border border-emerald-200 bg-emerald-50/50 rounded-md p-2">
+                      <div className="text-xs text-emerald-700 font-medium">מערכות</div>
+                      <div className="text-gray-900">
+                        {applyReport.perWholesale.systems.inserted} חדשים · {applyReport.perWholesale.systems.updated} עודכנו · {applyReport.perWholesale.systems.skipped} דולגו
+                      </div>
+                    </div>
+                  </div>
+                )
+              )}
             </div>
             <PreviewDiff report={applyReport} />
             <button

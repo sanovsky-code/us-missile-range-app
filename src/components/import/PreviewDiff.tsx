@@ -21,6 +21,34 @@ export default function PreviewDiff({ report }: { report: SelectiveImportReport 
         <SummaryTile label="קונפליקטים שטופלו" value={report.totals.sourceConflictCount} color="yellow" small />
       </div>
 
+      {/* Wholesale sheets summary (multi-type reports only). */}
+      {"perWholesale" in report && report.perWholesale && (
+        (report.perWholesale.radar_lifecycle.inserted +
+         report.perWholesale.radar_lifecycle.updated +
+         report.perWholesale.radar_lifecycle.skipped +
+         report.perWholesale.systems.inserted +
+         report.perWholesale.systems.updated +
+         report.perWholesale.systems.skipped) > 0 && (
+          <section className="bg-white border border-gray-200 rounded-lg p-3">
+            <h3 className="text-sm font-semibold text-gray-800 mb-2">גיליונות נוספים (יישום סיטונאי)</h3>
+            <div className="grid md:grid-cols-2 gap-2">
+              <div className="border border-sky-200 bg-sky-50/40 rounded-md p-2 text-sm">
+                <div className="text-xs text-sky-700 font-medium mb-1">מחזור חיים של ראדרים</div>
+                <div className="text-gray-900">
+                  {report.perWholesale.radar_lifecycle.inserted} חדשים · {report.perWholesale.radar_lifecycle.updated} עודכנו · {report.perWholesale.radar_lifecycle.skipped} דולגו
+                </div>
+              </div>
+              <div className="border border-emerald-200 bg-emerald-50/40 rounded-md p-2 text-sm">
+                <div className="text-xs text-emerald-700 font-medium mb-1">מערכות</div>
+                <div className="text-gray-900">
+                  {report.perWholesale.systems.inserted} חדשים · {report.perWholesale.systems.updated} עודכנו · {report.perWholesale.systems.skipped} דולגו
+                </div>
+              </div>
+            </div>
+          </section>
+        )
+      )}
+
       {report.sourceActions.length > 0 && (
         <section className="bg-white border border-gray-200 rounded-lg p-4">
           <h3 className="text-base font-semibold text-gray-900 mb-3">פעולות על מקורות</h3>

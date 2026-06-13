@@ -62,6 +62,12 @@ const SUPPORTED_SHEETS = [
   "Site_Activities",
   "Sources",
   "Contacts",
+  // Wholesale-apply sheets (bypass the per-row diff/wizard UI — too much
+  // scope for the wizard's SiteChangeTree right now). The parser reads
+  // them so they appear in ParseResult; runMultiTypeSelectiveImport
+  // bulk-upserts them inside the same transaction as the diffed sheets.
+  "Radar_Lifecycle",
+  "Systems",
 ] as const;
 
 const REQUIRED_SHEETS = ["Sites", "Radars", "Site_Activities"] as const;
@@ -2364,6 +2370,242 @@ export interface MultiSelectiveImportOptions {
 export interface MultiSelectiveImportReport extends Omit<SelectiveImportReport, "importType"> {
   importType: "multi";
   perType: Record<"sites" | "radars" | "activities" | "contacts", { create: number; update: number; skip: number }>;
+  /** Counts for the wholesale sheets (Radar_Lifecycle, Systems) that are
+   * upserted bulk during the apply transaction, without per-row diff in
+   * the wizard tree. inserted = INSERT path; updated = existing row
+   * replaced; skipped = row couldn't be applied (bad FK, missing required
+   * field, invalid enum). */
+  perWholesale: {
+    radar_lifecycle: { inserted: number; updated: number; skipped: number };
+    systems:         { inserted: number; updated: number; skipped: number };
+  };
+}
+
+
+// ---------------------------------------------------------------------------
+// Wholesale-apply helpers: Radar_Lifecycle and Systems sheets bypass the
+// per-row wizard diff (their UI would balloon SiteChangeTree) and instead
+// get bulk INSERT-OR-REPLACEd inside the same transaction as the diffed
+// sheets. Errors per row are reported as wizard issues; counts feed
+// perWholesale on the report.
+// ---------------------------------------------------------------------------
+
+const RADAR_LIFECYCLE_EVENT_TYPES_IMPORT = [
+  "Procurement specification", "Procurement award", "Contract award",
+  "Delivery / modernization", "Acceptance", "Commissioning",
+  "Planned acquisition", "Historical reference", "Decommissioning", "Other",
+] as const;
+
+const SYSTEM_CATEGORIES_IMPORT = [
+  "Optical Tracking", "Telemetry / Range Safety", "Electronic Warfare",
+  "Communications", "Command & Control", "Test Instrumentation",
+  "Weapons Test", "Other",
+] as const;
+
+interface WholesaleResult {
+  inserted: number;
+  updated: number;
+  skipped: number;
+  issues: ValidationIssue[];
+}
+
+function bulkUpsertLifecycleSheet(
+  txDb: ReturnType<typeof getDb>,
+  parsed: ParseResult,
+  changedBy: string,
+  mode: "apply" | "dryRun" = "apply",
+): WholesaleResult {
+  const sheet = parsed.sheets["Radar_Lifecycle"];
+  const out: WholesaleResult = { inserted: 0, updated: 0, skipped: 0, issues: [] };
+  if (!sheet) return out;
+
+  const existingRadarIds = new Set(
+    (txDb.prepare("SELECT radar_id, site_id FROM radars").all() as Array<{ radar_id: string; site_id: string }>)
+      .map((r) => r.radar_id),
+  );
+  const radarToSite = new Map<string, string>();
+  for (const r of txDb.prepare("SELECT radar_id, site_id FROM radars").all() as Array<{ radar_id: string; site_id: string }>) {
+    radarToSite.set(r.radar_id, r.site_id);
+  }
+  const existsStmt = txDb.prepare("SELECT 1 AS v FROM radar_lifecycle_events WHERE event_id = ?");
+  const upsertStmt = txDb.prepare(`
+    INSERT OR REPLACE INTO radar_lifecycle_events (
+      event_id, radar_id, site_id, event_type, event_date, event_year,
+      event_title, event_description, authority_or_owner, supplier_or_contractor,
+      disclosed_value, currency, value_scope, evidence_status, source_ids,
+      analyst_note, created_by
+    ) VALUES (
+      @event_id, @radar_id, @site_id, @event_type, @event_date, @event_year,
+      @event_title, @event_description, @authority_or_owner, @supplier_or_contractor,
+      @disclosed_value, @currency, @value_scope, @evidence_status, @source_ids,
+      @analyst_note, @created_by
+    )
+  `);
+
+  for (const row of sheet.rows) {
+    const cells = row.cells;
+    const radarId = (cells["radar_id"] ?? "").trim();
+    const eventType = (cells["event_type"] ?? "").trim();
+    const eventId = (cells["event_id"] ?? "").trim();
+
+    if (!radarId) {
+      out.skipped++;
+      out.issues.push({ sheet: "Radar_Lifecycle", row: row.rowNumber, field: "radar_id", value: "", rule: "required", message: "radar_id is required.", severity: "error" });
+      continue;
+    }
+    if (!existingRadarIds.has(radarId)) {
+      out.skipped++;
+      out.issues.push({ sheet: "Radar_Lifecycle", row: row.rowNumber, field: "radar_id", value: radarId, rule: "fk_violation", message: `radar_id "${radarId}" does not exist in radars table.`, severity: "error" });
+      continue;
+    }
+    if (!eventType) {
+      out.skipped++;
+      out.issues.push({ sheet: "Radar_Lifecycle", row: row.rowNumber, field: "event_type", value: "", rule: "required", message: "event_type is required.", severity: "error" });
+      continue;
+    }
+    if (!(RADAR_LIFECYCLE_EVENT_TYPES_IMPORT as readonly string[]).includes(eventType)) {
+      out.skipped++;
+      out.issues.push({ sheet: "Radar_Lifecycle", row: row.rowNumber, field: "event_type", value: eventType, rule: "invalid_enum", message: `event_type must be one of: ${RADAR_LIFECYCLE_EVENT_TYPES_IMPORT.join(", ")}.`, severity: "error" });
+      continue;
+    }
+
+    // Resolve site_id from the sheet (preferred) or fall back to the parent radar.
+    const siteIdFromSheet = (cells["site_id"] ?? "").trim();
+    const siteId = siteIdFromSheet || radarToSite.get(radarId) || "";
+
+    // Auto-generate event_id if missing. Pattern matches data-store.nextLifecycleEventId.
+    let finalEventId = eventId;
+    if (!finalEventId) {
+      const m = siteId.match(/SITE-(\d+)/i);
+      const sitePart = m ? m[1] : siteId.replace(/[^a-zA-Z0-9]/g, "");
+      const prefix = `EVT-RAD-${sitePart}-`;
+      const last = txDb.prepare("SELECT event_id FROM radar_lifecycle_events WHERE event_id LIKE ? ORDER BY event_id DESC LIMIT 1")
+        .get(`${prefix}%`) as { event_id?: string } | undefined;
+      const n = last?.event_id ? (Number(last.event_id.slice(prefix.length)) + 1) : 1;
+      finalEventId = `${prefix}${String(Number.isFinite(n) ? n : 1).padStart(3, "0")}`;
+    }
+
+    const isUpdate = !!existsStmt.get(finalEventId);
+
+    if (mode === "apply") {
+      upsertStmt.run({
+        event_id: finalEventId,
+        radar_id: radarId,
+        site_id: siteId,
+        event_type: eventType,
+        event_date: (cells["event_date"] ?? "").trim() || null,
+        event_year: cells["event_year"] ? Number(cells["event_year"]) || null : null,
+        event_title: (cells["event_title"] ?? "").trim() || null,
+        event_description: (cells["event_description"] ?? "").trim() || null,
+        authority_or_owner: (cells["authority_or_owner"] ?? "").trim() || null,
+        supplier_or_contractor: (cells["supplier_or_contractor"] ?? "").trim() || null,
+        disclosed_value: (cells["disclosed_value"] ?? "").trim() || null,
+        currency: (cells["currency"] ?? "").trim() || null,
+        value_scope: (cells["value_scope"] ?? "").trim() || null,
+        evidence_status: (cells["evidence_status"] ?? "").trim() || null,
+        source_ids: (cells["source_ids"] ?? "").trim() || null,
+        analyst_note: (cells["analyst_note"] ?? "").trim() || null,
+        created_by: changedBy,
+      });
+    }
+    if (isUpdate) out.updated++; else out.inserted++;
+  }
+  return out;
+}
+
+function bulkUpsertSystemsSheet(
+  txDb: ReturnType<typeof getDb>,
+  parsed: ParseResult,
+  changedBy: string,
+  mode: "apply" | "dryRun" = "apply",
+): WholesaleResult {
+  const sheet = parsed.sheets["Systems"];
+  const out: WholesaleResult = { inserted: 0, updated: 0, skipped: 0, issues: [] };
+  if (!sheet) return out;
+
+  const existingSiteIds = new Set(
+    (txDb.prepare("SELECT site_id FROM sites").all() as Array<{ site_id: string }>).map((r) => r.site_id),
+  );
+  const existsStmt = txDb.prepare("SELECT 1 AS v FROM systems WHERE system_id = ?");
+  const upsertStmt = txDb.prepare(`
+    INSERT OR REPLACE INTO systems (
+      system_id, site_id, system_name, system_category, purpose,
+      owner, operator, manufacturer, operational_status, public_description,
+      citations, confidence_level, last_verified_date, source_id, record_status,
+      created_by
+    ) VALUES (
+      @system_id, @site_id, @system_name, @system_category, @purpose,
+      @owner, @operator, @manufacturer, @operational_status, @public_description,
+      @citations, @confidence_level, @last_verified_date, @source_id, @record_status,
+      @created_by
+    )
+  `);
+
+  for (const row of sheet.rows) {
+    const cells = row.cells;
+    const siteId = (cells["site_id"] ?? "").trim();
+    const systemName = (cells["system_name"] ?? "").trim();
+    const systemCategory = (cells["system_category"] ?? "").trim();
+    const systemId = (cells["system_id"] ?? "").trim();
+
+    if (!siteId) {
+      out.skipped++;
+      out.issues.push({ sheet: "Systems", row: row.rowNumber, field: "site_id", value: "", rule: "required", message: "site_id is required.", severity: "error" });
+      continue;
+    }
+    if (!existingSiteIds.has(siteId)) {
+      out.skipped++;
+      out.issues.push({ sheet: "Systems", row: row.rowNumber, field: "site_id", value: siteId, rule: "fk_violation", message: `site_id "${siteId}" does not exist in sites table.`, severity: "error" });
+      continue;
+    }
+    if (!systemName) {
+      out.skipped++;
+      out.issues.push({ sheet: "Systems", row: row.rowNumber, field: "system_name", value: "", rule: "required", message: "system_name is required.", severity: "error" });
+      continue;
+    }
+    if (!(SYSTEM_CATEGORIES_IMPORT as readonly string[]).includes(systemCategory)) {
+      out.skipped++;
+      out.issues.push({ sheet: "Systems", row: row.rowNumber, field: "system_category", value: systemCategory, rule: "invalid_enum", message: `system_category must be one of: ${SYSTEM_CATEGORIES_IMPORT.join(", ")}.`, severity: "error" });
+      continue;
+    }
+
+    // Auto-generate system_id if missing. Pattern matches data-store.nextSystemId.
+    let finalSystemId = systemId;
+    if (!finalSystemId) {
+      const m = siteId.match(/SITE-(\d+)/i);
+      const sitePart = m ? m[1] : siteId.replace(/[^a-zA-Z0-9]/g, "");
+      const prefix = `SYS-${sitePart}-`;
+      const last = txDb.prepare("SELECT system_id FROM systems WHERE system_id LIKE ? ORDER BY system_id DESC LIMIT 1")
+        .get(`${prefix}%`) as { system_id?: string } | undefined;
+      const n = last?.system_id ? (Number(last.system_id.slice(prefix.length)) + 1) : 1;
+      finalSystemId = `${prefix}${String(Number.isFinite(n) ? n : 1).padStart(3, "0")}`;
+    }
+
+    const isUpdate = !!existsStmt.get(finalSystemId);
+
+    if (mode === "apply") {
+      upsertStmt.run({
+        system_id: finalSystemId,
+        site_id: siteId,
+        system_name: systemName,
+        system_category: systemCategory,
+        purpose: (cells["purpose"] ?? "").trim() || null,
+        owner: (cells["owner"] ?? "").trim() || null,
+        operator: (cells["operator"] ?? "").trim() || null,
+        manufacturer: (cells["manufacturer"] ?? "").trim() || null,
+        operational_status: (cells["operational_status"] ?? "").trim() || "Unknown",
+        public_description: (cells["public_description"] ?? "").trim() || null,
+        citations: (cells["citations"] ?? "").trim() || null,
+        confidence_level: (cells["confidence_level"] ?? "").trim() || "Low",
+        last_verified_date: (cells["last_verified_date"] ?? "").trim() || null,
+        source_id: (cells["source_id"] ?? "").trim() || null,
+        record_status: (cells["record_status"] ?? "").trim() || "Draft",
+        created_by: changedBy,
+      });
+    }
+    if (isUpdate) out.updated++; else out.inserted++;
+  }
+  return out;
 }
 
 
@@ -2395,6 +2637,10 @@ export async function runMultiTypeSelectiveImport(
       radars: { create: 0, update: 0, skip: 0 },
       activities: { create: 0, update: 0, skip: 0 },
       contacts: { create: 0, update: 0, skip: 0 },
+    },
+    perWholesale: {
+      radar_lifecycle: { inserted: 0, updated: 0, skipped: 0 },
+      systems:         { inserted: 0, updated: 0, skipped: 0 },
     },
     decisions: [],
     sourceActions: [],
@@ -2581,6 +2827,24 @@ export async function runMultiTypeSelectiveImport(
   }
   report.decisions = [...buckets.sites, ...buckets.radars, ...buckets.activities, ...buckets.contacts];
 
+  // Dry-run validate the wholesale sheets so preview shows accurate
+  // would-insert / would-update / would-skip counts BEFORE apply.
+  {
+    const lifecyclePreview = bulkUpsertLifecycleSheet(getDb(), opts.parsed, opts.changedBy ?? "import", "dryRun");
+    report.perWholesale.radar_lifecycle.inserted = lifecyclePreview.inserted;
+    report.perWholesale.radar_lifecycle.updated  = lifecyclePreview.updated;
+    report.perWholesale.radar_lifecycle.skipped  = lifecyclePreview.skipped;
+    report.totals.errorCount += lifecyclePreview.issues.filter((i) => i.severity === "error").length;
+    if (opts.mode === "preview") report.issues.push(...lifecyclePreview.issues);
+
+    const systemsPreview = bulkUpsertSystemsSheet(getDb(), opts.parsed, opts.changedBy ?? "import", "dryRun");
+    report.perWholesale.systems.inserted = systemsPreview.inserted;
+    report.perWholesale.systems.updated  = systemsPreview.updated;
+    report.perWholesale.systems.skipped  = systemsPreview.skipped;
+    report.totals.errorCount += systemsPreview.issues.filter((i) => i.severity === "error").length;
+    if (opts.mode === "preview") report.issues.push(...systemsPreview.issues);
+  }
+
   if (opts.mode === "preview") {
     report.status = report.totals.errorCount > 0 ? "Pending" : "Completed";
     report.completedAt = new Date().toISOString();
@@ -2672,6 +2936,21 @@ export async function runMultiTypeSelectiveImport(
       applyDecisions(txDb, buckets.radars, batchId, opts.changedBy ?? "import");
       applyDecisions(txDb, buckets.activities, batchId, opts.changedBy ?? "import");
       applyDecisions(txDb, buckets.contacts, batchId, opts.changedBy ?? "import");
+
+      // Wholesale sheets last (they need Sites+Radars to be in place for
+      // FK validation). No wizard diff — bulk INSERT-OR-REPLACE, errors
+      // collected per row.
+      const lifecycleResult = bulkUpsertLifecycleSheet(txDb, opts.parsed, opts.changedBy ?? "import");
+      report.perWholesale.radar_lifecycle.inserted = lifecycleResult.inserted;
+      report.perWholesale.radar_lifecycle.updated  = lifecycleResult.updated;
+      report.perWholesale.radar_lifecycle.skipped  = lifecycleResult.skipped;
+      report.issues.push(...lifecycleResult.issues);
+
+      const systemsResult = bulkUpsertSystemsSheet(txDb, opts.parsed, opts.changedBy ?? "import");
+      report.perWholesale.systems.inserted = systemsResult.inserted;
+      report.perWholesale.systems.updated  = systemsResult.updated;
+      report.perWholesale.systems.skipped  = systemsResult.skipped;
+      report.issues.push(...systemsResult.issues);
     });
     report.status = "Completed";
   } catch (err) {
