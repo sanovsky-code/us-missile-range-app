@@ -8,6 +8,7 @@ import { Site } from "@/lib/types";
 import SiteHeader from "@/components/site-profile/SiteHeader";
 import SiteOverview from "@/components/site-profile/SiteOverview";
 import RadarTable from "@/components/site-profile/RadarTable";
+import SystemsTable from "@/components/site-profile/SystemsTable";
 import ActivitiesSection from "@/components/site-profile/ActivitiesSection";
 import SiteContactsCard from "@/components/site-profile/SiteContactsCard";
 import SourcesSection from "@/components/site-profile/SourcesSection";
@@ -108,6 +109,12 @@ export default function SiteProfilePage() {
             <ActivitiesSection activities={site.activities || []} />
 
             <RadarTable radars={site.radars || []} sources={site.sources || []} />
+
+            <SystemsTable
+              siteId={site.site_id}
+              initialSystems={site.systems || []}
+              sources={site.sources || []}
+            />
 
             <SourcesSection sources={site.sources || []} />
 

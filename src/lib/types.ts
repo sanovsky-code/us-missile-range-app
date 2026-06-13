@@ -27,6 +27,7 @@ export interface Site {
   updated_by?: string;
   updated_date?: string;
   radars?: Radar[];
+  systems?: System[];
   activities?: SiteRangeActivity[];
   contacts?: Contact[];
   sources?: Source[];
@@ -53,6 +54,7 @@ export interface SiteListItem {
   record_status: string;
   activity_count: number;
   radar_count: number;
+  system_count: number;
   specializations: string[];
   /** True when the site has a row in site_favorites. Populated by
    * getAllSites() so list/map views can show a filled star without a
@@ -86,6 +88,7 @@ export interface CountryOverviewMeta {
   hidden_sites: number;
   country_hidden: boolean;
   total_radars: number;
+  total_systems: number;
   total_operational_activities: number;
   open_tasks: number;
 }
@@ -108,6 +111,7 @@ export interface CountrySiteRow {
   state?: string;
   is_hidden: boolean;
   radar_count: number;
+  system_count: number;
   activity_count: number;
   open_task_count: number;
 }
@@ -116,6 +120,14 @@ export interface CountryRadarBreakdown {
   by_type: Array<{ key: string; count: number }>;
   by_band: Array<{ key: string; count: number }>;
   top_models: Array<{ key: string; count: number }>;
+}
+
+/** Country-portal breakdown of every System row attached to a Site whose
+ * country matches. Mirrors CountryRadarBreakdown. */
+export interface CountrySystemBreakdown {
+  by_category: Array<{ key: string; count: number }>;
+  by_status: Array<{ key: string; count: number }>;
+  top_owners: Array<{ key: string; count: number }>;
 }
 
 export interface CountryActivityBreakdown {
@@ -162,6 +174,7 @@ export interface CountryOverview {
   data_quality: CountryDataQuality;
   sites: CountrySiteRow[];
   radar_breakdown: CountryRadarBreakdown;
+  system_breakdown: CountrySystemBreakdown;
   activity_breakdown: CountryActivityBreakdown;
   contacts: CountryContactRow[];
   sources: CountrySourceRow[];
@@ -176,6 +189,48 @@ export interface FavoriteSiteListItem extends SiteListItem {
   description: string;
   last_verified_date: string;
   open_task_count: number;
+}
+
+/** Fixed picklist for system_category. Same constant powers the Excel
+ * template dropdown, the import-side enum validation, the Site profile
+ * card filter, and the Country portal breakdown. Add new categories here
+ * (DB column is plain TEXT, so historical rows survive). */
+export const SYSTEM_CATEGORIES = [
+  "Optical Tracking",
+  "Telemetry / Range Safety",
+  "Electronic Warfare",
+  "Communications",
+  "Command & Control",
+  "Test Instrumentation",
+  "Weapons Test",
+  "Other",
+] as const;
+export type SystemCategory = (typeof SYSTEM_CATEGORIES)[number];
+
+/** One row of the `systems` table — a site capability that isn't a radar
+ * (optical tracking, telemetry, EW, etc.). One Site has many Systems,
+ * joined by site_id. Shape mirrors the Radar interface so the Site
+ * profile card and the import handler can share helpers. */
+export interface System {
+  system_id: string;
+  site_id: string;
+  system_name: string;
+  system_category: string;
+  purpose?: string;
+  owner?: string;
+  operator?: string;
+  manufacturer?: string;
+  operational_status: string;
+  public_description?: string;
+  citations?: string;
+  confidence_level: string;
+  last_verified_date?: string;
+  source_id?: string;
+  record_status: string;
+  created_by?: string;
+  created_at?: string;
+  updated_by?: string;
+  updated_at?: string;
 }
 
 export interface Radar {

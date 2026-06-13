@@ -16,9 +16,9 @@ import Link from "next/link";
 import { use as useReact } from "react";
 import { getDataStore } from "@/lib/data-store";
 import CountryHeader from "@/components/country/CountryHeader";
-import { Building2, Radio, Activity, Users, BookOpen, Gauge, ExternalLink, EyeOff } from "lucide-react";
+import { Building2, Radio, Activity, Users, BookOpen, Gauge, ExternalLink, EyeOff, Cpu } from "lucide-react";
 import type {
-  CountrySiteRow, CountryRadarBreakdown, CountryActivityBreakdown,
+  CountrySiteRow, CountryRadarBreakdown, CountrySystemBreakdown, CountryActivityBreakdown,
   CountryContactRow, CountrySourceRow, CountryDataQuality,
 } from "@/lib/types";
 
@@ -50,6 +50,7 @@ export default function CountryPortalPage({ params }: { params: Promise<{ name: 
         <DataQualityCard dq={overview.data_quality} totalSites={overview.meta.total_sites} />
         <SitesCard sites={overview.sites} />
         <RadarsCard breakdown={overview.radar_breakdown} totalRadars={overview.meta.total_radars} />
+        <SystemsCard breakdown={overview.system_breakdown} totalSystems={overview.meta.total_systems} />
         <ActivitiesCard breakdown={overview.activity_breakdown} totalActivities={overview.meta.total_operational_activities} />
         <ContactsCard contacts={overview.contacts} />
         <SourcesCard sources={overview.sources} />
@@ -150,6 +151,7 @@ function SitesCard({ sites }: { sites: CountrySiteRow[] }) {
                 <th className="px-2 py-2">סטטוס</th>
                 <th className="px-2 py-2">מדינת משנה</th>
                 <th className="px-2 py-2">ראדרים</th>
+                <th className="px-2 py-2">מערכות</th>
                 <th className="px-2 py-2">פעילויות</th>
                 <th className="px-2 py-2">משימות פתוחות</th>
               </tr>
@@ -181,6 +183,7 @@ function SitesCard({ sites }: { sites: CountrySiteRow[] }) {
                   <td className="px-2 py-2 text-gray-700">{s.record_status ?? "—"}</td>
                   <td className="px-2 py-2 text-gray-700" dir="auto">{s.state || "—"}</td>
                   <td className="px-2 py-2 text-gray-700 tabular-nums">{s.radar_count}</td>
+                  <td className="px-2 py-2 text-gray-700 tabular-nums">{s.system_count}</td>
                   <td className="px-2 py-2 text-gray-700 tabular-nums">{s.activity_count}</td>
                   <td className="px-2 py-2 tabular-nums">
                     {s.open_task_count > 0 ? (
@@ -210,6 +213,23 @@ function RadarsCard({ breakdown, totalRadars }: { breakdown: CountryRadarBreakdo
           <Breakdown title="לפי סוג" rows={breakdown.by_type} />
           <Breakdown title="לפי תדר" rows={breakdown.by_band} />
           <Breakdown title="דגמים מובילים" rows={breakdown.top_models} />
+        </div>
+      )}
+    </Card>
+  );
+}
+
+
+/* ============================== Systems ============================== */
+
+function SystemsCard({ breakdown, totalSystems }: { breakdown: CountrySystemBreakdown; totalSystems: number }) {
+  return (
+    <Card icon={<Cpu className="w-5 h-5" />} title="מערכות" count={totalSystems}>
+      {totalSystems === 0 ? <EmptyValue /> : (
+        <div className="grid md:grid-cols-3 gap-4">
+          <Breakdown title="לפי קטגוריה" rows={breakdown.by_category} />
+          <Breakdown title="לפי סטטוס תפעולי" rows={breakdown.by_status} />
+          <Breakdown title="בעלים מובילים" rows={breakdown.top_owners} />
         </div>
       )}
     </Card>

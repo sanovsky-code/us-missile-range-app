@@ -82,6 +82,36 @@ CREATE INDEX IF NOT EXISTS idx_radars_site ON radars(site_id);
 CREATE INDEX IF NOT EXISTS idx_radars_type ON radars(radar_type);
 CREATE INDEX IF NOT EXISTS idx_radars_status ON radars(operational_status);
 
+-- Site systems / capabilities. Mirrors the radars schema (one Site → many
+-- systems, joined by site_id) but covers non-radar instrumentation: optical
+-- tracking, telemetry, electronic warfare, command-and-control, etc.
+-- system_category is a fixed picklist driven by SYSTEM_CATEGORIES in types.ts.
+CREATE TABLE IF NOT EXISTS systems (
+  system_id            TEXT PRIMARY KEY,
+  site_id              TEXT NOT NULL,
+  system_name          TEXT,
+  system_category      TEXT,
+  purpose              TEXT,
+  owner                TEXT,
+  operator             TEXT,
+  manufacturer         TEXT,
+  operational_status   TEXT,
+  public_description   TEXT,
+  citations            TEXT,
+  confidence_level     TEXT,
+  last_verified_date   TEXT,
+  source_id            TEXT,
+  record_status        TEXT,
+  created_by           TEXT,
+  created_at           TEXT DEFAULT CURRENT_TIMESTAMP,
+  updated_by           TEXT,
+  updated_at           TEXT,
+  FOREIGN KEY (site_id) REFERENCES sites(site_id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_systems_site ON systems(site_id);
+CREATE INDEX IF NOT EXISTS idx_systems_category ON systems(system_category);
+CREATE INDEX IF NOT EXISTS idx_systems_status ON systems(operational_status);
+
 -- Operational / domain activities imported from the Excel "Site_Activities"
 -- sheet: missile tests, space launches, historical activity windows, etc.
 -- Distinct from site_timeline_activities below (which is the Salesforce-style

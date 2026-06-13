@@ -10,7 +10,7 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useState, useTransition } from "react";
-import { Globe, Eye, EyeOff, Loader2, ChevronRight, MapPin, Building2, Radio, Activity, ListChecks } from "lucide-react";
+import { Globe, Eye, EyeOff, Loader2, ChevronRight, MapPin, Building2, Radio, Cpu, Activity, ListChecks } from "lucide-react";
 import type { CountryOverviewMeta } from "@/lib/types";
 
 interface Props {
@@ -87,11 +87,12 @@ export default function CountryHeader({ meta }: Props) {
         {error && <p className="mt-2 text-xs text-red-600">{error}</p>}
 
         {/* Quick stats — Salesforce-style highlight row */}
-        <div className="mt-3 grid grid-cols-2 md:grid-cols-5 gap-3 text-sm">
+        <div className="mt-3 grid grid-cols-2 md:grid-cols-6 gap-3 text-sm">
           <Stat icon={<Building2 className="w-3 h-3" />} label="סך אתרים" value={meta.total_sites} />
           <Stat icon={<Eye className="w-3 h-3" />} label="גלויים" value={meta.visible_sites} variant="ok" />
           <Stat icon={<EyeOff className="w-3 h-3" />} label="מוסתרים בודדית" value={meta.hidden_sites} variant={meta.hidden_sites > 0 ? "warn" : undefined} />
           <Stat icon={<Radio className="w-3 h-3" />} label="ראדרים" value={meta.total_radars} />
+          <Stat icon={<Cpu className="w-3 h-3" />} label="מערכות" value={meta.total_systems} />
           <Stat icon={<ListChecks className="w-3 h-3" />} label="משימות פתוחות" value={meta.open_tasks} variant={meta.open_tasks > 0 ? "info" : undefined} />
         </div>
       </div>

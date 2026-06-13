@@ -100,10 +100,13 @@ function main() {
     const activities = readSheet(workbook, "Site_Activities");
     const sources = readSheet(workbook, "Sources");
     const contacts = readSheet(workbook, "Contacts");
+    // Systems is optional — older workbooks didn't have it. readSheet returns []
+    // for missing sheets.
+    const systems = readSheet(workbook, "Systems");
 
     console.log(
       `  Read: ${sites.length} sites, ${radars.length} radars, ${activities.length} activities, ` +
-      `${sources.length} sources, ${contacts.length} contacts`
+      `${sources.length} sources, ${contacts.length} contacts, ${systems.length} systems`
     );
 
     // UPSERT on conflict instead of INSERT OR REPLACE. The latter would
@@ -197,6 +200,18 @@ function main() {
       )
     `);
 
+    const insertSystem = db.prepare(`
+      INSERT OR REPLACE INTO systems (
+        system_id, site_id, system_name, system_category, purpose,
+        owner, operator, manufacturer, operational_status, public_description,
+        citations, confidence_level, last_verified_date, source_id, record_status
+      ) VALUES (
+        @system_id, @site_id, @system_name, @system_category, @purpose,
+        @owner, @operator, @manufacturer, @operational_status, @public_description,
+        @citations, @confidence_level, @last_verified_date, @source_id, @record_status
+      )
+    `);
+
     const insertContact = db.prepare(`
       INSERT OR REPLACE INTO contacts (
         contact_id, site_id, organization_name, contact_type,
@@ -213,7 +228,7 @@ function main() {
       // cascade and erase site_timeline_activities / site_contacts /
       // site_comments / site_tasks. The sites table is updated row-by-
       // row via the ON CONFLICT DO UPDATE upsert defined above.
-      db.exec("DELETE FROM contacts; DELETE FROM site_range_activities; DELETE FROM radars; DELETE FROM sources;");
+      db.exec("DELETE FROM contacts; DELETE FROM site_range_activities; DELETE FROM radars; DELETE FROM systems; DELETE FROM sources;");
 
       for (const s of sources) {
         insertSource.run({
@@ -295,6 +310,32 @@ function main() {
         });
       }
 
+      let skippedSystems = 0;
+      for (const sy of systems) {
+        const siteId = toText(sy.site_id);
+        if (!siteId || !validSiteIds.has(siteId)) {
+          skippedSystems++;
+          continue;
+        }
+        insertSystem.run({
+          system_id: toText(sy.system_id) ?? "",
+          site_id: siteId,
+          system_name: toText(sy.system_name),
+          system_category: toText(sy.system_category),
+          purpose: toText(sy.purpose),
+          owner: toText(sy.owner),
+          operator: toText(sy.operator),
+          manufacturer: toText(sy.manufacturer),
+          operational_status: toText(sy.operational_status),
+          public_description: toText(sy.public_description),
+          citations: toText(sy.citations),
+          confidence_level: toText(sy.confidence_level),
+          last_verified_date: toText(sy.last_verified_date),
+          source_id: toText(sy.source_id),
+          record_status: toText(sy.record_status),
+        });
+      }
+
       let skippedActivities = 0;
       for (const a of activities) {
         const siteId = toText(a.site_id);
@@ -339,7 +380,7 @@ function main() {
       db.prepare("INSERT OR REPLACE INTO app_meta (key, value) VALUES (?, ?)")
         .run("last_import_at", new Date().toISOString());
 
-      console.log(`  Skipped (no matching site_id): ${skippedRadars} radars, ${skippedActivities} activities, ${skippedContacts} contacts`);
+      console.log(`  Skipped (no matching site_id): ${skippedRadars} radars, ${skippedSystems} systems, ${skippedActivities} activities, ${skippedContacts} contacts`);
     });
 
     runImport();
@@ -348,6 +389,7 @@ function main() {
       SELECT
         (SELECT COUNT(*) FROM sites) AS sites,
         (SELECT COUNT(*) FROM radars) AS radars,
+        (SELECT COUNT(*) FROM systems) AS systems,
         (SELECT COUNT(*) FROM site_range_activities) AS activities,
         (SELECT COUNT(*) FROM sources) AS sources,
         (SELECT COUNT(*) FROM contacts) AS contacts

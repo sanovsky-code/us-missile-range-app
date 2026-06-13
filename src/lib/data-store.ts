@@ -57,6 +57,9 @@ import {
   OpportunityFieldHistoryEntry,
   OpportunityTrackedField,
   OPPORTUNITY_TRACKED_FIELDS,
+  System,
+  SYSTEM_CATEGORIES,
+  CountrySystemBreakdown,
 } from "./types";
 import { getDb, getDbPath, transaction } from "./db";
 
@@ -145,6 +148,30 @@ function rowToRadar(row: Record<string, unknown>): Radar {
     last_verified_date: String(row.last_verified_date ?? ""),
     source_id: String(row.source_id ?? ""),
     record_status: String(row.record_status ?? ""),
+  };
+}
+
+function rowToSystem(row: Record<string, unknown>): System {
+  return {
+    system_id: String(row.system_id ?? ""),
+    site_id: String(row.site_id ?? ""),
+    system_name: String(row.system_name ?? ""),
+    system_category: String(row.system_category ?? ""),
+    purpose: toUndef(row.purpose as string | null) ?? undefined,
+    owner: toUndef(row.owner as string | null) ?? undefined,
+    operator: toUndef(row.operator as string | null) ?? undefined,
+    manufacturer: toUndef(row.manufacturer as string | null) ?? undefined,
+    operational_status: String(row.operational_status ?? ""),
+    public_description: toUndef(row.public_description as string | null) ?? undefined,
+    citations: toUndef(row.citations as string | null) ?? undefined,
+    confidence_level: String(row.confidence_level ?? ""),
+    last_verified_date: toUndef(row.last_verified_date as string | null) ?? undefined,
+    source_id: toUndef(row.source_id as string | null) ?? undefined,
+    record_status: String(row.record_status ?? ""),
+    created_by: toUndef(row.created_by as string | null) ?? undefined,
+    created_at: toUndef(row.created_at as string | null) ?? undefined,
+    updated_by: toUndef(row.updated_by as string | null) ?? undefined,
+    updated_at: toUndef(row.updated_at as string | null) ?? undefined,
   };
 }
 
@@ -528,6 +555,7 @@ class DataStore {
         confidence_level, record_status,
         description, missile_relevance, launch_relevance, radar_relevance,
         (SELECT COUNT(*) FROM radars WHERE radars.site_id = sites.site_id) AS radar_count,
+        (SELECT COUNT(*) FROM systems WHERE systems.site_id = sites.site_id) AS system_count,
         (SELECT COUNT(*) FROM site_range_activities WHERE site_range_activities.site_id = sites.site_id) AS activity_count
       FROM sites
       WHERE ${where.join(" AND ")}
@@ -593,6 +621,7 @@ class DataStore {
         record_status: site.record_status,
         activity_count: Number(r.activity_count ?? 0),
         radar_count: Number(r.radar_count ?? 0),
+        system_count: Number(r.system_count ?? 0),
         specializations,
         is_favorite: favoriteSiteIds.has(siteId),
       };
@@ -614,6 +643,7 @@ class DataStore {
     if (!row) return null;
     const site = rowToSite(row);
     site.radars = this.getRadarsBySite(siteId);
+    site.systems = this.getSystemsBySite(siteId);
     site.activities = this.getActivitiesBySite(siteId);
     site.contacts = this.getContactsBySite(siteId);
     site.sources = this.getSourcesForSite(siteId);
@@ -624,6 +654,11 @@ class DataStore {
   private getRadarsBySite(siteId: string): Radar[] {
     const rows = getDb().prepare("SELECT * FROM radars WHERE site_id = ?").all(siteId) as Record<string, unknown>[];
     return rows.map(rowToRadar);
+  }
+
+  private getSystemsBySite(siteId: string): System[] {
+    const rows = getDb().prepare("SELECT * FROM systems WHERE site_id = ? ORDER BY system_id ASC").all(siteId) as Record<string, unknown>[];
+    return rows.map(rowToSystem);
   }
 
   private getActivitiesBySite(siteId: string): SiteRangeActivity[] {
@@ -651,6 +686,15 @@ class DataStore {
       if (r.source_id) ids.add(r.source_id);
       if (r.citations) {
         for (const id of r.citations.split(/[,\s]+/)) {
+          if (id.startsWith("SRC-")) ids.add(id);
+        }
+      }
+    }
+    const systemRows = db.prepare("SELECT source_id, citations FROM systems WHERE site_id = ?").all(siteId) as { source_id?: string; citations?: string }[];
+    for (const s of systemRows) {
+      if (s.source_id) ids.add(s.source_id);
+      if (s.citations) {
+        for (const id of s.citations.split(/[,\s]+/)) {
           if (id.startsWith("SRC-")) ids.add(id);
         }
       }
@@ -1140,6 +1184,197 @@ class DataStore {
   }
 
 
+  // --- Site systems (CRUD) ------------------------------------------------
+  //
+  // Site capabilities other than radars — optical tracking, telemetry, EW,
+  // C2, etc. Same shape as the Excel-imported rows (the parser writes into
+  // the same table). UI CRUD lives at /api/sites/:id/systems and
+  // /api/systems/:id.
+
+  listSystemsForSite(siteId: string): System[] {
+    const rows = getDb()
+      .prepare(`SELECT * FROM systems WHERE site_id = ?
+                ORDER BY system_id ASC`)
+      .all(siteId) as Record<string, unknown>[];
+    return rows.map(rowToSystem);
+  }
+
+  getSystem(systemId: string): System | null {
+    const row = getDb().prepare("SELECT * FROM systems WHERE system_id = ?").get(systemId) as
+      | Record<string, unknown> | undefined;
+    return row ? rowToSystem(row) : null;
+  }
+
+  createSystem(input: {
+    system_id?: string;
+    site_id: string;
+    system_name: string;
+    system_category: string;
+    purpose?: string;
+    owner?: string;
+    operator?: string;
+    manufacturer?: string;
+    operational_status?: string;
+    public_description?: string;
+    citations?: string;
+    confidence_level?: string;
+    last_verified_date?: string;
+    source_id?: string;
+    record_status?: string;
+    created_by?: string;
+  }): System {
+    if (!input.system_name || !input.system_name.trim()) throw new Error("system_name is required");
+    if (!input.system_category || !input.system_category.trim()) throw new Error("system_category is required");
+    if (!(SYSTEM_CATEGORIES as readonly string[]).includes(input.system_category)) {
+      throw new Error(`Invalid system_category: ${input.system_category}`);
+    }
+    const siteExists = getDb().prepare("SELECT 1 FROM sites WHERE site_id = ?").get(input.site_id);
+    if (!siteExists) throw new Error(`Site "${input.site_id}" not found`);
+
+    // Auto-generate a system_id if the caller didn't provide one. Pattern
+    // SYS-<site-numeric-suffix>-NNN matches the user's example
+    // (SYS-0137-001), grouping every Site's systems together by ID.
+    const systemId = input.system_id?.trim() || this.nextSystemId(input.site_id);
+
+    if (input.source_id) {
+      const ok = getDb().prepare("SELECT 1 FROM sources WHERE source_id = ?").get(input.source_id);
+      if (!ok) throw new Error(`Source "${input.source_id}" not found`);
+    }
+
+    getDb().prepare(`
+      INSERT INTO systems (
+        system_id, site_id, system_name, system_category, purpose,
+        owner, operator, manufacturer, operational_status, public_description,
+        citations, confidence_level, last_verified_date, source_id,
+        record_status, created_by
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      systemId,
+      input.site_id,
+      input.system_name.trim(),
+      input.system_category.trim(),
+      norm(input.purpose),
+      norm(input.owner),
+      norm(input.operator),
+      norm(input.manufacturer),
+      input.operational_status?.trim() || "Unknown",
+      norm(input.public_description),
+      norm(input.citations),
+      input.confidence_level?.trim() || "Low",
+      norm(input.last_verified_date),
+      norm(input.source_id),
+      input.record_status?.trim() || "Draft",
+      norm(input.created_by),
+    );
+    return this.getSystem(systemId)!;
+  }
+
+  updateSystem(systemId: string, patch: Partial<{
+    system_name: string;
+    system_category: string;
+    purpose: string | null;
+    owner: string | null;
+    operator: string | null;
+    manufacturer: string | null;
+    operational_status: string;
+    public_description: string | null;
+    citations: string | null;
+    confidence_level: string;
+    last_verified_date: string | null;
+    source_id: string | null;
+    record_status: string;
+    updated_by: string;
+  }>): System | null {
+    const existing = this.getSystem(systemId);
+    if (!existing) return null;
+
+    if (patch.system_category && !(SYSTEM_CATEGORIES as readonly string[]).includes(patch.system_category)) {
+      throw new Error(`Invalid system_category: ${patch.system_category}`);
+    }
+    if (patch.source_id) {
+      const ok = getDb().prepare("SELECT 1 FROM sources WHERE source_id = ?").get(patch.source_id);
+      if (!ok) throw new Error(`Source "${patch.source_id}" not found`);
+    }
+
+    const updates: string[] = [];
+    const params: unknown[] = [];
+    const set = (col: string, val: unknown) => {
+      if (val === undefined) return;
+      updates.push(`${col} = ?`);
+      params.push(typeof val === "string" ? (val.trim() || null) : val);
+    };
+    set("system_name", patch.system_name);
+    set("system_category", patch.system_category);
+    set("purpose", patch.purpose);
+    set("owner", patch.owner);
+    set("operator", patch.operator);
+    set("manufacturer", patch.manufacturer);
+    set("operational_status", patch.operational_status);
+    set("public_description", patch.public_description);
+    set("citations", patch.citations);
+    set("confidence_level", patch.confidence_level);
+    set("last_verified_date", patch.last_verified_date);
+    set("source_id", patch.source_id);
+    set("record_status", patch.record_status);
+
+    if (updates.length === 0) return existing;
+    updates.push("updated_at = CURRENT_TIMESTAMP");
+    if (patch.updated_by !== undefined) {
+      updates.push("updated_by = ?");
+      params.push(norm(patch.updated_by));
+    }
+    params.push(systemId);
+    getDb().prepare(`UPDATE systems SET ${updates.join(", ")} WHERE system_id = ?`).run(...params);
+    return this.getSystem(systemId);
+  }
+
+  deleteSystem(systemId: string): boolean {
+    const result = getDb().prepare("DELETE FROM systems WHERE system_id = ?").run(systemId);
+    return result.changes > 0;
+  }
+
+  /** Generate the next sequential system_id for a Site, in the form
+   * SYS-<site-suffix>-NNN. Reads MAX(suffix number) for this site_id and
+   * adds 1. Falls back to "001" if no systems exist yet for this site. */
+  private nextSystemId(siteId: string): string {
+    // Site ids look like SITE-0137. Pull the numeric tail; default to the
+    // whole id if it doesn't match (defensive).
+    const m = siteId.match(/SITE-(\d+)/i);
+    const sitePart = m ? m[1] : siteId.replace(/[^a-zA-Z0-9]/g, "");
+    const prefix = `SYS-${sitePart}-`;
+    const row = getDb().prepare(
+      "SELECT system_id FROM systems WHERE system_id LIKE ? ORDER BY system_id DESC LIMIT 1"
+    ).get(`${prefix}%`) as { system_id?: string } | undefined;
+    if (!row?.system_id) return `${prefix}001`;
+    const last = Number(row.system_id.slice(prefix.length));
+    const next = Number.isFinite(last) ? last + 1 : 1;
+    return `${prefix}${String(next).padStart(3, "0")}`;
+  }
+
+  /** Country-portal breakdown: systems by category, by operational status,
+   * and the top owners across every Site in the country. */
+  getCountrySystemBreakdown(country: string): CountrySystemBreakdown {
+    const db = getDb();
+    const where = "y.site_id IN (SELECT site_id FROM sites WHERE country = ?)";
+    const by_category = db.prepare(`
+      SELECT COALESCE(NULLIF(y.system_category, ''), 'Unknown') AS key, COUNT(*) AS count
+      FROM systems y WHERE ${where}
+      GROUP BY key ORDER BY count DESC
+    `).all(country) as Array<{ key: string; count: number }>;
+    const by_status = db.prepare(`
+      SELECT COALESCE(NULLIF(y.operational_status, ''), 'Unknown') AS key, COUNT(*) AS count
+      FROM systems y WHERE ${where}
+      GROUP BY key ORDER BY count DESC
+    `).all(country) as Array<{ key: string; count: number }>;
+    const top_owners = db.prepare(`
+      SELECT COALESCE(NULLIF(y.owner, ''), '(unspecified)') AS key, COUNT(*) AS count
+      FROM systems y WHERE ${where}
+      GROUP BY key ORDER BY count DESC LIMIT 8
+    `).all(country) as Array<{ key: string; count: number }>;
+    return { by_category, by_status, top_owners };
+  }
+
+
   // --- Visibility (hide/show sites and countries) -------------------------
   //
   // A site can be hidden in two layers:
@@ -1241,6 +1476,9 @@ class DataStore {
     const radarRow = db.prepare(
       "SELECT COUNT(*) AS n FROM radars WHERE site_id IN (SELECT site_id FROM sites WHERE country = ?)"
     ).get(country) as { n: number };
+    const systemRow = db.prepare(
+      "SELECT COUNT(*) AS n FROM systems WHERE site_id IN (SELECT site_id FROM sites WHERE country = ?)"
+    ).get(country) as { n: number };
     const actRow = db.prepare(
       "SELECT COUNT(*) AS n FROM site_range_activities WHERE site_id IN (SELECT site_id FROM sites WHERE country = ?)"
     ).get(country) as { n: number };
@@ -1258,6 +1496,7 @@ class DataStore {
       hidden_sites: row.hidden_sites,
       country_hidden: !!hiddenRow,
       total_radars: radarRow.n,
+      total_systems: systemRow.n,
       total_operational_activities: actRow.n,
       open_tasks: taskRow.n,
     };
@@ -1269,6 +1508,7 @@ class DataStore {
         s.site_id, s.site_name, s.site_type, s.size_category,
         s.confidence_level, s.record_status, s.state, s.is_hidden,
         (SELECT COUNT(*) FROM radars r WHERE r.site_id = s.site_id) AS radar_count,
+        (SELECT COUNT(*) FROM systems y WHERE y.site_id = s.site_id) AS system_count,
         (SELECT COUNT(*) FROM site_range_activities a WHERE a.site_id = s.site_id) AS activity_count,
         (SELECT COUNT(*) FROM site_timeline_activities a
           WHERE a.site_id = s.site_id AND a.activity_type = 'Task'
@@ -1444,6 +1684,7 @@ class DataStore {
       data_quality: this.getCountryDataQuality(country),
       sites: this.getCountrySites(country),
       radar_breakdown: this.getCountryRadarBreakdown(country),
+      system_breakdown: this.getCountrySystemBreakdown(country),
       activity_breakdown: this.getCountryActivityBreakdown(country),
       contacts: this.getCountryContacts(country),
       sources: this.getCountrySources(country),
@@ -1493,6 +1734,7 @@ class DataStore {
         s.missile_relevance, s.launch_relevance, s.radar_relevance,
         f.created_at AS favorite_created_at, f.notes AS favorite_notes,
         (SELECT COUNT(*) FROM radars             WHERE radars.site_id             = s.site_id) AS radar_count,
+        (SELECT COUNT(*) FROM systems            WHERE systems.site_id            = s.site_id) AS system_count,
         (SELECT COUNT(*) FROM site_range_activities WHERE site_range_activities.site_id = s.site_id) AS activity_count,
         (SELECT COUNT(*) FROM site_timeline_activities a
                             WHERE a.site_id = s.site_id
@@ -1528,6 +1770,7 @@ class DataStore {
         record_status: site.record_status,
         activity_count: Number(r.activity_count ?? 0),
         radar_count: Number(r.radar_count ?? 0),
+        system_count: Number(r.system_count ?? 0),
         specializations,
         is_favorite: true,
         description: site.description,
