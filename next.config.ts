@@ -1,6 +1,22 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
+  // Force single-threaded compilation. Corporate EDR (CrowdStrike /
+  // SentinelOne / Defender ATP) on this machine hooks Windows
+  // CreateProcess and intermittently denies node subprocess spawns,
+  // surfacing as "Jest worker encountered 2 child process exceptions,
+  // exceeding retry limit" on whichever route hit the deny. Capping
+  // workers to 1 / disabling worker threads removes the spawn churn —
+  // EDR has nothing to deny. Cost: slightly slower first-compile per
+  // route; HMR is unaffected because nothing rebuilds in parallel.
+  experimental: {
+    cpus: 1,
+    workerThreads: false,
+    webpackBuildWorker: false,
+    parallelServerCompiles: false,
+    parallelServerBuildTraces: false,
+  },
+
   // Produce a self-contained build under .next/standalone/ so the
   // distribution zip can run on an employee's laptop with nothing more
   // than a portable Node.js runtime — no npm install at the destination.
