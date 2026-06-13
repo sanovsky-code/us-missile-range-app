@@ -41,12 +41,20 @@ $ProjectRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 $ProjectName = Split-Path $ProjectRoot -Leaf
 $NextDir     = Join-Path $ProjectRoot ".next"
 $ProjectNm   = Join-Path $ProjectRoot "node_modules"
+# IMPORTANT: keep the two junction targets on SEPARATE branches of the
+# cache tree. If both .next and node_modules junctioned into the SAME
+# parent folder, `next build` would treat .next/node_modules/ (which is
+# the same physical files as <project>/node_modules/) as build output
+# and try to unlink the live next-swc binary → EPERM. Different parents
+# means `.next/node_modules` doesn't exist on disk, which is what next
+# build expects.
 $CacheRoot   = Join-Path $env:LOCALAPPDATA "next-cache"
 $Target      = Join-Path $CacheRoot $ProjectName
-$TargetNm    = Join-Path $Target "node_modules"
+$NmStoreRoot = Join-Path $CacheRoot "node-modules-store"
+$TargetNm    = Join-Path $NmStoreRoot $ProjectName
 
 Write-Host "Project root        : $ProjectRoot"
-Write-Host "Cache target        : $Target"
+Write-Host ".next target        : $Target"
 Write-Host "node_modules target : $TargetNm"
 Write-Host ""
 
@@ -63,13 +71,12 @@ dev server first, then re-run this script:
     exit 1
 }
 
-# 2. Ensure the cache target root exists.
-if (-not (Test-Path $CacheRoot)) {
-    New-Item -ItemType Directory -Path $CacheRoot | Out-Null
-}
+# 2. Ensure the cache target roots exist (both branches).
+if (-not (Test-Path $CacheRoot))   { New-Item -ItemType Directory -Path $CacheRoot   | Out-Null }
+if (-not (Test-Path $NmStoreRoot)) { New-Item -ItemType Directory -Path $NmStoreRoot | Out-Null }
 if (-not (Test-Path $Target)) {
     New-Item -ItemType Directory -Path $Target | Out-Null
-    Write-Host "[+] Created cache target: $Target"
+    Write-Host "[+] Created .next target: $Target"
 }
 
 
@@ -103,15 +110,27 @@ if ($LASTEXITCODE -ne 0) {
 # node_modules junction
 # -----------------------------------------------------------------------
 
-# 4. If <target>/node_modules is a stale junction (from the old layout
-#    that pointed BACK at project), strip it before we move the real
-#    folder in.
-if (Test-Path $TargetNm) {
-    $item = Get-Item $TargetNm -Force
+# 4. If a legacy <CacheRoot>/<ProjectName>/node_modules exists (from the
+#    old "single target" layout that put both junctions in one folder —
+#    that broke `next build` because it tried to delete what it thought
+#    were stale build artifacts inside .next/node_modules but were the
+#    live SWC binary), move it to the new isolated location. Otherwise
+#    new installs would go to the old place and the bug would resurface.
+$LegacyNm = Join-Path $Target "node_modules"
+if (Test-Path $LegacyNm) {
+    $item = Get-Item $LegacyNm -Force
     $isReparse = $item.Attributes -band [IO.FileAttributes]::ReparsePoint
     if ($isReparse) {
         Write-Host "[~] Removing legacy node_modules junction inside target"
-        cmd /c "rmdir `"$TargetNm`"" | Out-Null
+        [System.IO.Directory]::Delete($LegacyNm, $false)
+    } else {
+        Write-Host "[~] Migrating legacy real node_modules out of $Target..."
+        if (Test-Path $TargetNm) {
+            Write-Warning "    $TargetNm already exists; the legacy folder will be deleted."
+            Remove-Item -Recurse -Force $LegacyNm
+        } else {
+            Move-Item -Path $LegacyNm -Destination $TargetNm -Force
+        }
     }
 }
 

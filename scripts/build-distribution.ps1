@@ -88,10 +88,25 @@ Either:
 
 # ---------- 1. Stop any running dev server ----------
 Section "Step 1/6  Stop running Node.js dev server (if any)"
-Get-Process -Name node -ErrorAction SilentlyContinue | ForEach-Object {
-    Write-Host "  Stopping PID $($_.Id)"
-    Stop-Process -Id $_.Id -Force
+# Compute this script's ancestor chain so we don't accidentally kill our
+# own npm/cmd/powershell parents. If you invoke via `npm run build:dist`
+# the npm host is a node process — killing it makes step 2's
+# `npm run db:import` fail with "tsx not recognized" because the PATH
+# inherited from npm (which adds node_modules/.bin) is gone.
+$ancestors = @($PID)
+$p = (Get-CimInstance Win32_Process -Filter "ProcessId=$PID").ParentProcessId
+while ($p) {
+    $ancestors += $p
+    $proc = Get-CimInstance Win32_Process -Filter "ProcessId=$p" -ErrorAction SilentlyContinue
+    if (-not $proc) { break }
+    $p = $proc.ParentProcessId
 }
+Get-Process -Name node -ErrorAction SilentlyContinue |
+    Where-Object { $ancestors -notcontains $_.Id } |
+    ForEach-Object {
+        Write-Host "  Stopping PID $($_.Id)"
+        Stop-Process -Id $_.Id -Force
+    }
 Start-Sleep -Milliseconds 500
 
 # ---------- 2. Rebuild data/app.db so the zip ships a fresh DB ----------
@@ -110,13 +125,33 @@ if ($LASTEXITCODE -ne 0) { Write-Error "npm run db:import failed" }
 
 # ---------- 3. next build (produces .next/standalone/) ----------
 Section "Step 3/6  next build"
-# Wipe .next/ to drop any stale `next dev` artifacts (the malformed
+# Wipe stale `next dev` artifacts before `next build` (the malformed
 # .next/dev/types/routes.d.ts can break the production TypeScript
-# check that next build runs).
+# check). IMPORTANT: when .next is a junction to %LOCALAPPDATA%
+# (scripts/setup-dev-cache.ps1), the junction TARGET also hosts the
+# node_modules junction's target as a SIBLING folder. Iterating the
+# junction's children and deleting them all would wipe node_modules
+# too. So we only delete the specific subfolders next dev/build creates,
+# leaving node_modules and any unrelated siblings alone.
 $NextCache = Join-Path $ProjectRoot ".next"
 if (Test-Path $NextCache) {
-    Write-Host "  Clearing $NextCache ..."
-    Remove-Item $NextCache -Recurse -Force
+    $nextItem = Get-Item $NextCache -Force
+    $isJunction = $nextItem.Attributes -band [IO.FileAttributes]::ReparsePoint
+    if ($isJunction) {
+        Write-Host "  Clearing dev/build subfolders inside .next junction (preserving link + sibling node_modules)"
+        foreach ($sub in @("dev", "build", "server", "static", "standalone", "cache", "trace", "diagnostics", "logs", "types")) {
+            $p = Join-Path $NextCache $sub
+            if (Test-Path $p) { Remove-Item $p -Recurse -Force -ErrorAction SilentlyContinue }
+        }
+        # Also wipe stray loose files (build-manifest.json etc.) so the
+        # next build sees a clean state. node_modules is a folder, so
+        # this -File filter never matches it.
+        Get-ChildItem -Path $NextCache -File -Force -ErrorAction SilentlyContinue |
+            ForEach-Object { Remove-Item $_.FullName -Force -ErrorAction SilentlyContinue }
+    } else {
+        Write-Host "  Clearing $NextCache ..."
+        Remove-Item $NextCache -Recurse -Force
+    }
 }
 & npm run build
 if ($LASTEXITCODE -ne 0) { Write-Error "next build failed" }
@@ -195,13 +230,22 @@ if (Test-Path $PublicSrc) {
     Write-Host "  Copied public/ → dist/$AppFolder/public/"
 }
 
-# 5d. data/ — the freshly imported app.db plus the canonical Excel so future
-#     re-imports are possible from inside the dist if needed.
+# 5d. data/ — the freshly imported app.db, the canonical Excel so future
+#     re-imports are possible from inside the dist, and the import template
+#     so the in-app "הורד תבנית ייבוא" button (/api/import-template reads
+#     data/import-template.xlsx) returns the file instead of 404.
 $DataDest = Join-Path $AppOut "data"
 New-Item -ItemType Directory -Path $DataDest -Force | Out-Null
 Copy-Item -Path $DbPath  -Destination $DataDest -Force
 Copy-Item -Path $XlsPath -Destination $DataDest -Force
-Write-Host "  Copied data/app.db + us_missile_range_data.xlsx → dist/$AppFolder/data/"
+$TemplatePath = Join-Path $ProjectRoot "data\import-template.xlsx"
+if (Test-Path $TemplatePath) {
+    Copy-Item -Path $TemplatePath -Destination $DataDest -Force
+    Write-Host "  Copied data/app.db + us_missile_range_data.xlsx + import-template.xlsx → dist/$AppFolder/data/"
+} else {
+    Write-Warning "  data/import-template.xlsx missing — in-app template download will 404. Run 'npm run build:template' before retrying."
+    Write-Host "  Copied data/app.db + us_missile_range_data.xlsx → dist/$AppFolder/data/"
+}
 
 # 5e. Empty bucket directories that the running app expects to exist.
 foreach ($d in @("files\documents","files\images","files\exports","backups","imports","imports\previews")) {
