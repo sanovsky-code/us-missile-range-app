@@ -60,6 +60,9 @@ import {
   System,
   SYSTEM_CATEGORIES,
   CountrySystemBreakdown,
+  RadarLifecycleEvent,
+  RADAR_LIFECYCLE_EVENT_TYPES,
+  FavoriteRadarListItem,
 } from "./types";
 import { getDb, getDbPath, transaction } from "./db";
 
@@ -148,6 +151,31 @@ function rowToRadar(row: Record<string, unknown>): Radar {
     last_verified_date: String(row.last_verified_date ?? ""),
     source_id: String(row.source_id ?? ""),
     record_status: String(row.record_status ?? ""),
+  };
+}
+
+function rowToLifecycleEvent(row: Record<string, unknown>): RadarLifecycleEvent {
+  return {
+    event_id: String(row.event_id ?? ""),
+    radar_id: String(row.radar_id ?? ""),
+    site_id: String(row.site_id ?? ""),
+    event_type: String(row.event_type ?? ""),
+    event_date: toUndef(row.event_date as string | null) ?? undefined,
+    event_year: row.event_year === null || row.event_year === undefined ? undefined : Number(row.event_year),
+    event_title: toUndef(row.event_title as string | null) ?? undefined,
+    event_description: toUndef(row.event_description as string | null) ?? undefined,
+    authority_or_owner: toUndef(row.authority_or_owner as string | null) ?? undefined,
+    supplier_or_contractor: toUndef(row.supplier_or_contractor as string | null) ?? undefined,
+    disclosed_value: toUndef(row.disclosed_value as string | null) ?? undefined,
+    currency: toUndef(row.currency as string | null) ?? undefined,
+    value_scope: toUndef(row.value_scope as string | null) ?? undefined,
+    evidence_status: toUndef(row.evidence_status as string | null) ?? undefined,
+    source_ids: toUndef(row.source_ids as string | null) ?? undefined,
+    analyst_note: toUndef(row.analyst_note as string | null) ?? undefined,
+    created_by: toUndef(row.created_by as string | null) ?? undefined,
+    created_at: toUndef(row.created_at as string | null) ?? undefined,
+    updated_by: toUndef(row.updated_by as string | null) ?? undefined,
+    updated_at: toUndef(row.updated_at as string | null) ?? undefined,
   };
 }
 
@@ -652,8 +680,28 @@ class DataStore {
   }
 
   private getRadarsBySite(siteId: string): Radar[] {
-    const rows = getDb().prepare("SELECT * FROM radars WHERE site_id = ?").all(siteId) as Record<string, unknown>[];
-    return rows.map(rowToRadar);
+    const db = getDb();
+    const rows = db.prepare("SELECT * FROM radars WHERE site_id = ?").all(siteId) as Record<string, unknown>[];
+    if (rows.length === 0) return [];
+    // Bulk-fetch lifecycle counts + favorite flags so the UI can render the
+    // ⏱ chip and ★ icon without an N+1 round-trip per radar row.
+    const radarIds = rows.map((r) => String(r.radar_id));
+    const placeholders = radarIds.map(() => "?").join(",");
+    const lifecycleRows = db.prepare(
+      `SELECT radar_id, COUNT(*) AS n FROM radar_lifecycle_events
+       WHERE radar_id IN (${placeholders}) GROUP BY radar_id`
+    ).all(...radarIds) as { radar_id: string; n: number }[];
+    const lifecycleByRadar = new Map(lifecycleRows.map((r) => [r.radar_id, r.n]));
+    const favoriteRows = db.prepare(
+      `SELECT radar_id FROM radar_favorites WHERE radar_id IN (${placeholders})`
+    ).all(...radarIds) as { radar_id: string }[];
+    const favoriteRadarIds = new Set(favoriteRows.map((r) => r.radar_id));
+    return rows.map((r) => {
+      const radar = rowToRadar(r);
+      radar.lifecycle_count = lifecycleByRadar.get(radar.radar_id) ?? 0;
+      radar.is_favorite = favoriteRadarIds.has(radar.radar_id);
+      return radar;
+    });
   }
 
   private getSystemsBySite(siteId: string): System[] {
@@ -1372,6 +1420,206 @@ class DataStore {
       GROUP BY key ORDER BY count DESC LIMIT 8
     `).all(country) as Array<{ key: string; count: number }>;
     return { by_category, by_status, top_owners };
+  }
+
+
+
+  // --- Radar lifecycle events (CRUD) --------------------------------------
+  //
+  // Per-radar log of procurement / contract / acceptance / commissioning /
+  // modernization / decommissioning events. One Radar has many events
+  // (radar_lifecycle_events.radar_id FK), but the row also carries a
+  // denormalized site_id for cheap site-level queries.
+
+  listLifecycleEventsForRadar(radarId: string): RadarLifecycleEvent[] {
+    const rows = getDb()
+      .prepare(`SELECT * FROM radar_lifecycle_events
+                WHERE radar_id = ?
+                ORDER BY COALESCE(event_date, '') DESC, event_year DESC, event_id ASC`)
+      .all(radarId) as Record<string, unknown>[];
+    return rows.map(rowToLifecycleEvent);
+  }
+
+  getLifecycleEvent(eventId: string): RadarLifecycleEvent | null {
+    const row = getDb().prepare("SELECT * FROM radar_lifecycle_events WHERE event_id = ?").get(eventId) as
+      | Record<string, unknown> | undefined;
+    return row ? rowToLifecycleEvent(row) : null;
+  }
+
+  createLifecycleEvent(input: {
+    event_id?: string;
+    radar_id: string;
+    event_type: string;
+    event_date?: string;
+    event_year?: number;
+    event_title?: string;
+    event_description?: string;
+    authority_or_owner?: string;
+    supplier_or_contractor?: string;
+    disclosed_value?: string;
+    currency?: string;
+    value_scope?: string;
+    evidence_status?: string;
+    source_ids?: string;
+    analyst_note?: string;
+    created_by?: string;
+  }): RadarLifecycleEvent {
+    if (!input.event_type || !input.event_type.trim()) {
+      throw new Error("event_type is required");
+    }
+    if (!(RADAR_LIFECYCLE_EVENT_TYPES as readonly string[]).includes(input.event_type)) {
+      throw new Error(`Invalid event_type: ${input.event_type}`);
+    }
+    // Resolve site_id from the parent radar so callers don't have to.
+    const radarRow = getDb().prepare("SELECT site_id FROM radars WHERE radar_id = ?")
+      .get(input.radar_id) as { site_id?: string } | undefined;
+    if (!radarRow) throw new Error(`Radar "${input.radar_id}" not found`);
+    const siteId = radarRow.site_id ?? "";
+
+    // event_id pattern: EVT-RAD-<site-suffix>-NNN, per-site sequence —
+    // matches the operator's screenshot (EVT-RAD-0137-001 ... -006 paired
+    // with different radars at SITE-0137).
+    const eventId = input.event_id?.trim() || this.nextLifecycleEventId(siteId);
+
+    getDb().prepare(`
+      INSERT INTO radar_lifecycle_events (
+        event_id, radar_id, site_id, event_type, event_date, event_year,
+        event_title, event_description, authority_or_owner, supplier_or_contractor,
+        disclosed_value, currency, value_scope, evidence_status, source_ids,
+        analyst_note, created_by
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      eventId, input.radar_id, siteId, input.event_type.trim(),
+      norm(input.event_date),
+      input.event_year ?? null,
+      norm(input.event_title), norm(input.event_description),
+      norm(input.authority_or_owner), norm(input.supplier_or_contractor),
+      norm(input.disclosed_value), norm(input.currency),
+      norm(input.value_scope), norm(input.evidence_status),
+      norm(input.source_ids), norm(input.analyst_note),
+      norm(input.created_by),
+    );
+    return this.getLifecycleEvent(eventId)!;
+  }
+
+  updateLifecycleEvent(eventId: string, patch: Partial<{
+    event_type: string;
+    event_date: string | null;
+    event_year: number | null;
+    event_title: string | null;
+    event_description: string | null;
+    authority_or_owner: string | null;
+    supplier_or_contractor: string | null;
+    disclosed_value: string | null;
+    currency: string | null;
+    value_scope: string | null;
+    evidence_status: string | null;
+    source_ids: string | null;
+    analyst_note: string | null;
+    updated_by: string;
+  }>): RadarLifecycleEvent | null {
+    const existing = this.getLifecycleEvent(eventId);
+    if (!existing) return null;
+    if (patch.event_type && !(RADAR_LIFECYCLE_EVENT_TYPES as readonly string[]).includes(patch.event_type)) {
+      throw new Error(`Invalid event_type: ${patch.event_type}`);
+    }
+    const updates: string[] = [];
+    const params: unknown[] = [];
+    const set = (col: string, val: unknown) => {
+      if (val === undefined) return;
+      updates.push(`${col} = ?`);
+      params.push(typeof val === "string" ? (val.trim() || null) : val);
+    };
+    set("event_type", patch.event_type);
+    set("event_date", patch.event_date);
+    set("event_year", patch.event_year);
+    set("event_title", patch.event_title);
+    set("event_description", patch.event_description);
+    set("authority_or_owner", patch.authority_or_owner);
+    set("supplier_or_contractor", patch.supplier_or_contractor);
+    set("disclosed_value", patch.disclosed_value);
+    set("currency", patch.currency);
+    set("value_scope", patch.value_scope);
+    set("evidence_status", patch.evidence_status);
+    set("source_ids", patch.source_ids);
+    set("analyst_note", patch.analyst_note);
+    if (updates.length === 0) return existing;
+    updates.push("updated_at = CURRENT_TIMESTAMP");
+    if (patch.updated_by !== undefined) {
+      updates.push("updated_by = ?");
+      params.push(norm(patch.updated_by));
+    }
+    params.push(eventId);
+    getDb().prepare(`UPDATE radar_lifecycle_events SET ${updates.join(", ")} WHERE event_id = ?`).run(...params);
+    return this.getLifecycleEvent(eventId);
+  }
+
+  deleteLifecycleEvent(eventId: string): boolean {
+    const r = getDb().prepare("DELETE FROM radar_lifecycle_events WHERE event_id = ?").run(eventId);
+    return r.changes > 0;
+  }
+
+  /** Generate the next sequential event_id for a Site, in the form
+   * EVT-RAD-<site-suffix>-NNN. Per-site sequence (not per-radar) to match
+   * the operator's existing log style. */
+  private nextLifecycleEventId(siteId: string): string {
+    const m = siteId.match(/SITE-(\d+)/i);
+    const sitePart = m ? m[1] : siteId.replace(/[^a-zA-Z0-9]/g, "");
+    const prefix = `EVT-RAD-${sitePart}-`;
+    const row = getDb().prepare(
+      "SELECT event_id FROM radar_lifecycle_events WHERE event_id LIKE ? ORDER BY event_id DESC LIMIT 1"
+    ).get(`${prefix}%`) as { event_id?: string } | undefined;
+    if (!row?.event_id) return `${prefix}001`;
+    const last = Number(row.event_id.slice(prefix.length));
+    const next = Number.isFinite(last) ? last + 1 : 1;
+    return `${prefix}${String(next).padStart(3, "0")}`;
+  }
+
+
+  // --- Radar favorites ----------------------------------------------------
+  //
+  // Pointer-only — same model as site_favorites. UNIQUE(radar_id) keeps
+  // "add favorite" idempotent.
+
+  isRadarFavorite(radarId: string): boolean {
+    const row = getDb().prepare("SELECT 1 AS v FROM radar_favorites WHERE radar_id = ?").get(radarId);
+    return !!row;
+  }
+
+  addRadarFavorite(radarId: string, opts?: { created_by?: string; notes?: string }): boolean {
+    const radarExists = getDb().prepare("SELECT 1 FROM radars WHERE radar_id = ?").get(radarId);
+    if (!radarExists) throw new Error(`Radar "${radarId}" not found`);
+    const result = getDb().prepare(`
+      INSERT OR IGNORE INTO radar_favorites (radar_id, created_by, notes)
+      VALUES (?, ?, ?)
+    `).run(radarId, opts?.created_by ?? null, opts?.notes ?? null);
+    return result.changes > 0;
+  }
+
+  removeRadarFavorite(radarId: string): boolean {
+    const result = getDb().prepare("DELETE FROM radar_favorites WHERE radar_id = ?").run(radarId);
+    return result.changes > 0;
+  }
+
+  /** /favorites page: every favorited Radar joined to its Radar + Site
+   * columns the list view needs, plus lifecycle counts. Visibility-aware:
+   * hides radars whose Site is hidden (per-site or per-country). */
+  listFavoriteRadars(): FavoriteRadarListItem[] {
+    return getDb().prepare(`
+      SELECT
+        r.radar_id, r.radar_name, r.radar_model, r.radar_type,
+        r.operational_status, r.confidence_level,
+        r.site_id, s.site_name, s.country,
+        (SELECT COUNT(*) FROM radar_lifecycle_events e WHERE e.radar_id = r.radar_id) AS lifecycle_count,
+        f.created_at AS favorite_created_at, f.notes AS favorite_notes
+      FROM radar_favorites f
+      JOIN radars r ON r.radar_id = f.radar_id
+      JOIN sites  s ON s.site_id  = r.site_id
+      WHERE s.record_status != 'Archived'
+        AND s.is_hidden = 0
+        AND s.country NOT IN (SELECT country FROM hidden_countries)
+      ORDER BY datetime(f.created_at) DESC, r.radar_name ASC
+    `).all() as FavoriteRadarListItem[];
   }
 
 

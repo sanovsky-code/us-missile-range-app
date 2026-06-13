@@ -103,10 +103,14 @@ function main() {
     // Systems is optional — older workbooks didn't have it. readSheet returns []
     // for missing sheets.
     const systems = readSheet(workbook, "Systems");
+    // Radar_Lifecycle is also optional. Per-radar procurement / contract /
+    // delivery / commissioning / decommissioning events.
+    const lifecycle = readSheet(workbook, "Radar_Lifecycle");
 
     console.log(
       `  Read: ${sites.length} sites, ${radars.length} radars, ${activities.length} activities, ` +
-      `${sources.length} sources, ${contacts.length} contacts, ${systems.length} systems`
+      `${sources.length} sources, ${contacts.length} contacts, ${systems.length} systems, ` +
+      `${lifecycle.length} lifecycle events`
     );
 
     // UPSERT on conflict instead of INSERT OR REPLACE. The latter would
@@ -200,6 +204,20 @@ function main() {
       )
     `);
 
+    const insertLifecycleEvent = db.prepare(`
+      INSERT OR REPLACE INTO radar_lifecycle_events (
+        event_id, radar_id, site_id, event_type, event_date, event_year,
+        event_title, event_description, authority_or_owner, supplier_or_contractor,
+        disclosed_value, currency, value_scope, evidence_status, source_ids,
+        analyst_note
+      ) VALUES (
+        @event_id, @radar_id, @site_id, @event_type, @event_date, @event_year,
+        @event_title, @event_description, @authority_or_owner, @supplier_or_contractor,
+        @disclosed_value, @currency, @value_scope, @evidence_status, @source_ids,
+        @analyst_note
+      )
+    `);
+
     const insertSystem = db.prepare(`
       INSERT OR REPLACE INTO systems (
         system_id, site_id, system_name, system_category, purpose,
@@ -228,7 +246,11 @@ function main() {
       // cascade and erase site_timeline_activities / site_contacts /
       // site_comments / site_tasks. The sites table is updated row-by-
       // row via the ON CONFLICT DO UPDATE upsert defined above.
-      db.exec("DELETE FROM contacts; DELETE FROM site_range_activities; DELETE FROM radars; DELETE FROM systems; DELETE FROM sources;");
+      // Lifecycle events FIRST (FK on radar_id; ON DELETE CASCADE would
+      // wipe them anyway when we delete radars, but explicit beats
+      // implicit). NOT touching radar_favorites — operator preference,
+      // and the radar rows are about to be repopulated with the same ids.
+      db.exec("DELETE FROM radar_lifecycle_events; DELETE FROM contacts; DELETE FROM site_range_activities; DELETE FROM radars; DELETE FROM systems; DELETE FROM sources;");
 
       for (const s of sources) {
         insertSource.run({
@@ -310,6 +332,53 @@ function main() {
         });
       }
 
+      // Build a set of radar_ids that survived the radar upsert so we can
+      // reject lifecycle rows that reference a missing radar.
+      const validRadarIds = new Set<string>();
+      for (const r of radars) {
+        const id = toText(r.radar_id);
+        const siteId = toText(r.site_id);
+        if (id && siteId && validSiteIds.has(siteId)) validRadarIds.add(id);
+      }
+
+      let skippedLifecycle = 0;
+      for (const le of lifecycle) {
+        const radarId = toText(le.radar_id);
+        if (!radarId || !validRadarIds.has(radarId)) {
+          skippedLifecycle++;
+          continue;
+        }
+        // site_id from the lifecycle row is authoritative if present;
+        // otherwise look it up from the radar.
+        let siteId = toText(le.site_id);
+        if (!siteId) {
+          const r = radars.find((row) => toText(row.radar_id) === radarId);
+          siteId = r ? toText(r.site_id) ?? "" : "";
+        }
+        if (!siteId) {
+          skippedLifecycle++;
+          continue;
+        }
+        insertLifecycleEvent.run({
+          event_id: toText(le.event_id) ?? "",
+          radar_id: radarId,
+          site_id: siteId,
+          event_type: toText(le.event_type),
+          event_date: toText(le.event_date),
+          event_year: toInt(le.event_year),
+          event_title: toText(le.event_title),
+          event_description: toText(le.event_description),
+          authority_or_owner: toText(le.authority_or_owner),
+          supplier_or_contractor: toText(le.supplier_or_contractor),
+          disclosed_value: toText(le.disclosed_value),
+          currency: toText(le.currency),
+          value_scope: toText(le.value_scope),
+          evidence_status: toText(le.evidence_status),
+          source_ids: toText(le.source_ids),
+          analyst_note: toText(le.analyst_note),
+        });
+      }
+
       let skippedSystems = 0;
       for (const sy of systems) {
         const siteId = toText(sy.site_id);
@@ -380,7 +449,7 @@ function main() {
       db.prepare("INSERT OR REPLACE INTO app_meta (key, value) VALUES (?, ?)")
         .run("last_import_at", new Date().toISOString());
 
-      console.log(`  Skipped (no matching site_id): ${skippedRadars} radars, ${skippedSystems} systems, ${skippedActivities} activities, ${skippedContacts} contacts`);
+      console.log(`  Skipped (no matching site_id/radar_id): ${skippedRadars} radars, ${skippedLifecycle} lifecycle events, ${skippedSystems} systems, ${skippedActivities} activities, ${skippedContacts} contacts`);
     });
 
     runImport();
@@ -389,6 +458,7 @@ function main() {
       SELECT
         (SELECT COUNT(*) FROM sites) AS sites,
         (SELECT COUNT(*) FROM radars) AS radars,
+        (SELECT COUNT(*) FROM radar_lifecycle_events) AS lifecycle_events,
         (SELECT COUNT(*) FROM systems) AS systems,
         (SELECT COUNT(*) FROM site_range_activities) AS activities,
         (SELECT COUNT(*) FROM sources) AS sources,

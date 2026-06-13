@@ -112,6 +112,59 @@ CREATE INDEX IF NOT EXISTS idx_systems_site ON systems(site_id);
 CREATE INDEX IF NOT EXISTS idx_systems_category ON systems(system_category);
 CREATE INDEX IF NOT EXISTS idx_systems_status ON systems(operational_status);
 
+-- Per-radar lifecycle log: procurement / award / delivery / acceptance /
+-- commissioning / modernization / decommissioning events. One Radar has
+-- many events (FK on radar_id; ON DELETE CASCADE so wiping a radar also
+-- wipes its history). site_id is denormalized for cheap site-level
+-- queries — kept in sync via the createLifecycleEvent helper.
+--
+-- disclosed_value is TEXT (not REAL) so it can preserve operator prefixes
+-- the way the analyst log them in Excel ("195583823", ">100000000",
+-- "undisclosed"). currency is a separate column for ISO codes.
+-- source_ids is a comma-separated list of SRC-* ids, matching the
+-- existing radars.citations / systems.citations convention.
+CREATE TABLE IF NOT EXISTS radar_lifecycle_events (
+  event_id              TEXT PRIMARY KEY,
+  radar_id              TEXT NOT NULL,
+  site_id               TEXT NOT NULL,
+  event_type            TEXT NOT NULL,
+  event_date            TEXT,
+  event_year            INTEGER,
+  event_title           TEXT,
+  event_description     TEXT,
+  authority_or_owner    TEXT,
+  supplier_or_contractor TEXT,
+  disclosed_value       TEXT,
+  currency              TEXT,
+  value_scope           TEXT,
+  evidence_status       TEXT,
+  source_ids            TEXT,
+  analyst_note          TEXT,
+  created_by            TEXT,
+  created_at            TEXT DEFAULT CURRENT_TIMESTAMP,
+  updated_by            TEXT,
+  updated_at            TEXT,
+  FOREIGN KEY (radar_id) REFERENCES radars(radar_id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_radar_lifecycle_radar ON radar_lifecycle_events(radar_id);
+CREATE INDEX IF NOT EXISTS idx_radar_lifecycle_site ON radar_lifecycle_events(site_id);
+CREATE INDEX IF NOT EXISTS idx_radar_lifecycle_year ON radar_lifecycle_events(event_year);
+CREATE INDEX IF NOT EXISTS idx_radar_lifecycle_type ON radar_lifecycle_events(event_type);
+
+-- Per-user radar favorites. Mirrors site_favorites: pointer-only, UNIQUE
+-- on radar_id keeps "add favorite" idempotent. ON DELETE CASCADE removes
+-- the favorite if the underlying radar disappears.
+CREATE TABLE IF NOT EXISTS radar_favorites (
+  id           INTEGER PRIMARY KEY AUTOINCREMENT,
+  radar_id     TEXT NOT NULL UNIQUE,
+  created_by   TEXT,
+  created_at   TEXT DEFAULT CURRENT_TIMESTAMP,
+  sort_order   INTEGER,
+  notes        TEXT,
+  FOREIGN KEY (radar_id) REFERENCES radars(radar_id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_radar_favorites_radar ON radar_favorites(radar_id);
+
 -- Operational / domain activities imported from the Excel "Site_Activities"
 -- sheet: missile tests, space launches, historical activity windows, etc.
 -- Distinct from site_timeline_activities below (which is the Salesforce-style

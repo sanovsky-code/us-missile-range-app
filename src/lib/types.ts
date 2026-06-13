@@ -254,6 +254,85 @@ export interface Radar {
   last_verified_date: string;
   source_id: string;
   record_status: string;
+  /** Set by getRadarsBySite() so the table can show a "⏱ N" chip without a
+   * second query per row. Number of rows in radar_lifecycle_events with
+   * this radar_id. Counts hidden / archived events too. */
+  lifecycle_count?: number;
+  /** Set by getRadarsBySite() — TRUE when radar_favorites has a row for
+   * this radar_id under the current installation. */
+  is_favorite?: boolean;
+}
+
+/** Salesforce-style fixed picklist of lifecycle event types. The DB column
+ * is plain TEXT so historical rows survive future picklist edits; UI uses
+ * this list for the modal dropdown and the import template's data
+ * validation. */
+export const RADAR_LIFECYCLE_EVENT_TYPES = [
+  "Procurement specification",
+  "Procurement award",
+  "Contract award",
+  "Delivery / modernization",
+  "Acceptance",
+  "Commissioning",
+  "Planned acquisition",
+  "Historical reference",
+  "Decommissioning",
+  "Other",
+] as const;
+export type RadarLifecycleEventType = (typeof RADAR_LIFECYCLE_EVENT_TYPES)[number];
+
+/** One row of radar_lifecycle_events. disclosed_value is text on purpose
+ * — operators record approximate / qualified values ("195583823",
+ * ">100000000", "undisclosed") so a numeric column would be lossy. */
+export interface RadarLifecycleEvent {
+  event_id: string;
+  radar_id: string;
+  site_id: string;
+  event_type: string;
+  event_date?: string;
+  event_year?: number;
+  event_title?: string;
+  event_description?: string;
+  authority_or_owner?: string;
+  supplier_or_contractor?: string;
+  disclosed_value?: string;
+  currency?: string;
+  value_scope?: string;
+  evidence_status?: string;
+  /** Comma-separated SRC-* ids, matching the radars.citations / systems.citations convention. */
+  source_ids?: string;
+  analyst_note?: string;
+  created_by?: string;
+  created_at?: string;
+  updated_by?: string;
+  updated_at?: string;
+}
+
+/** One row of radar_favorites — pointer to a Radar, NOT a copy of it. */
+export interface RadarFavorite {
+  id: number;
+  radar_id: string;
+  created_by?: string;
+  created_at: string;
+  sort_order?: number;
+  notes?: string;
+}
+
+/** Joined favorite-row + the radar/site columns the /favorites page needs
+ * to render without a second round-trip per row. */
+export interface FavoriteRadarListItem {
+  radar_id: string;
+  radar_name: string;
+  radar_model?: string;
+  radar_type?: string;
+  operational_status?: string;
+  confidence_level?: string;
+  site_id: string;
+  site_name: string;
+  country?: string;
+  lifecycle_count: number;
+  favorite_created_at: string;
+  favorite_notes?: string;
 }
 
 /**

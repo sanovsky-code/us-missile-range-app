@@ -3,8 +3,9 @@
 import { useState } from "react";
 import { Radar, Source } from "@/lib/types";
 import { ConfidenceBadge, StatusBadge } from "@/components/ui/Badge";
-import { Radio, ChevronDown, ChevronUp } from "lucide-react";
+import { Radio, ChevronDown, ChevronUp, Clock, Star } from "lucide-react";
 import CitedText from "@/components/ui/CitedText";
+import RadarLifecycleSection from "./RadarLifecycleSection";
 
 function isEnglish(text: string): boolean {
   const latinChars = text.match(/[a-zA-Z]/g)?.length || 0;
@@ -29,6 +30,29 @@ function LtrText({ children, className = "" }: { children: React.ReactNode; clas
 
 function RadarRow({ radar, sources }: { radar: Radar; sources: Source[] }) {
   const [expanded, setExpanded] = useState(false);
+  // Local mirrors of the server-supplied counts/flags so the row stays
+  // responsive after a CRUD action inside the expanded panel without a
+  // full Site re-fetch. Seeded from props but updated by child callbacks.
+  const [lifecycleCount, setLifecycleCount] = useState<number>(radar.lifecycle_count ?? 0);
+  const [isFavorite, setIsFavorite] = useState<boolean>(!!radar.is_favorite);
+  const [favoriteBusy, setFavoriteBusy] = useState(false);
+
+  const toggleFavorite = async (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (favoriteBusy) return;
+    setFavoriteBusy(true);
+    const next = !isFavorite;
+    setIsFavorite(next); // optimistic
+    try {
+      const method = next ? "POST" : "DELETE";
+      const res = await fetch(`/api/radar-favorites/${radar.radar_id}`, { method });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    } catch {
+      setIsFavorite(!next); // revert
+    } finally {
+      setFavoriteBusy(false);
+    }
+  };
 
   return (
     <>
@@ -45,6 +69,30 @@ function RadarRow({ radar, sources }: { radar: Radar; sources: Source[] }) {
             <span className="font-semibold text-gray-900">
               <LtrText>{radar.radar_name}</LtrText>
             </span>
+            {lifecycleCount > 0 && (
+              <span
+                className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[10px] font-medium bg-sky-50 text-sky-700 border border-sky-200"
+                title={`${lifecycleCount} אירועי מחזור חיים — לחץ להרחיב`}
+              >
+                <Clock className="w-3 h-3" /> {lifecycleCount}
+              </span>
+            )}
+            {/* Favorite star at the end (visually leftmost in RTL via flex order) */}
+            <button
+              type="button"
+              onClick={toggleFavorite}
+              disabled={favoriteBusy}
+              className="p-0.5 ml-1"
+              aria-label={isFavorite ? "הסר ממועדפים" : "הוסף למועדפים"}
+              title={isFavorite ? "הסר ממועדפים" : "הוסף למועדפים"}
+            >
+              <Star
+                className={
+                  "w-4 h-4 transition-colors " +
+                  (isFavorite ? "fill-yellow-400 text-yellow-500" : "text-gray-300 hover:text-yellow-500")
+                }
+              />
+            </button>
           </div>
         </td>
         <td className="py-3 px-4 text-gray-600 text-left" dir="ltr">
@@ -108,6 +156,13 @@ function RadarRow({ radar, sources }: { radar: Radar; sources: Source[] }) {
                 </tbody>
               </table>
             </div>
+
+            {/* Lifecycle timeline — only mounted while the row is expanded so
+                we don't fetch lifecycle data for every collapsed radar. */}
+            <RadarLifecycleSection
+              radarId={radar.radar_id}
+              onCountChange={setLifecycleCount}
+            />
           </td>
         </tr>
       )}
@@ -165,7 +220,7 @@ export default function RadarTable({ radars, sources = [] }: { radars: Radar[]; 
           </tbody>
         </table>
       </div>
-      <p className="text-xs text-gray-400 mt-2">לחץ על שורה כדי לפתוח מידע מפורט</p>
+      <p className="text-xs text-gray-400 mt-2">לחץ על שורה כדי לפתוח מידע מפורט. כוכב = מועדף, ⏱ = אירועי מחזור חיים.</p>
     </div>
   );
 }
