@@ -3,9 +3,12 @@
 import { useEffect, useState } from "react";
 import {
   Users, Plus, Edit2, Trash2, Save, X, Mail, Phone,
-  Loader2, AlertCircle,
+  Loader2, AlertCircle, ChevronDown, ChevronUp,
 } from "lucide-react";
 import { Contact, SiteContact } from "@/lib/types";
+import ImportedContactRow from "./ImportedContactRow";
+import ContactHistoryFeed from "./ContactHistoryFeed";
+import { useCurrentUser } from "@/lib/current-user";
 
 interface Props {
   siteId: string;
@@ -55,6 +58,7 @@ function detectLtr(text: string): boolean {
 }
 
 export default function SiteContactsCard({ siteId, importedContacts = [] }: Props) {
+  const { currentUser } = useCurrentUser();
   const [contacts, setContacts] = useState<SiteContact[]>([]);
   const [loading, setLoading] = useState(true);
   const [addOpen, setAddOpen] = useState(false);
@@ -62,6 +66,22 @@ export default function SiteContactsCard({ siteId, importedContacts = [] }: Prop
   const [form, setForm] = useState<FormState>(EMPTY_FORM);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Local copy so inline edits to imported contacts can refresh the
+  // displayed row without round-tripping the parent page.
+  const [importedContactsState, setImportedContactsState] = useState<Contact[]>(importedContacts);
+  useEffect(() => { setImportedContactsState(importedContacts); }, [importedContacts]);
+  // Per-user-managed-contact expand state: a Set of ids currently open.
+  const [expandedSiteContactIds, setExpandedSiteContactIds] = useState<Set<number>>(new Set());
+  const toggleSiteContactExpand = (id: number) => {
+    setExpandedSiteContactIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+  // Tick bumped after a successful save to nudge the inline history feed.
+  const [siteContactHistoryTick, setSiteContactHistoryTick] = useState(0);
 
   const reload = async () => {
     setLoading(true);
@@ -115,12 +135,14 @@ export default function SiteContactsCard({ siteId, importedContacts = [] }: Prop
       const res = await fetch(url, {
         method,
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(form),
+        body: JSON.stringify({ ...form, updated_by: currentUser?.trim() || undefined }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "שגיאה");
       cancelForm();
       await reload();
+      // Nudge any open history feeds to refetch (PATCH path only).
+      if (editingId) setSiteContactHistoryTick((t) => t + 1);
     } catch (err) {
       setError(err instanceof Error ? err.message : "שגיאה");
     } finally {
@@ -203,101 +225,119 @@ export default function SiteContactsCard({ siteId, importedContacts = [] }: Prop
                 />
               </li>
             ) : (
-              <li key={c.id} className="border border-gray-100 rounded-lg p-3 hover:bg-gray-50/50">
-                <div className="flex items-start justify-between gap-3">
-                  <div className="min-w-0 flex-1">
-                    <p
-                      className="font-medium text-gray-900"
-                      dir={detectLtr(c.full_name) ? "ltr" : undefined}
-                      style={detectLtr(c.full_name) ? { textAlign: "left" } : undefined}
-                    >
-                      {c.full_name}
-                    </p>
-                    {(c.role_title || c.organization) && (
-                      <p className="text-sm text-gray-600 mt-0.5">
-                        {[c.role_title, c.organization].filter(Boolean).join(" · ")}
-                      </p>
-                    )}
-                    <div className="flex flex-wrap items-center gap-x-3 gap-y-1 mt-2 text-xs text-gray-500">
-                      {c.email && (
-                        <a
-                          href={`mailto:${c.email}`}
-                          className="inline-flex items-center gap-1 text-blue-600 hover:text-blue-800"
-                          dir="ltr"
+              <li key={c.id} className="border border-gray-100 rounded-lg overflow-hidden">
+                <div
+                  className="p-3 hover:bg-gray-50/50 cursor-pointer"
+                  onClick={() => toggleSiteContactExpand(c.id)}
+                >
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="flex items-start gap-2 min-w-0 flex-1">
+                      <span className="mt-1 flex-shrink-0">
+                        {expandedSiteContactIds.has(c.id)
+                          ? <ChevronUp className="w-3.5 h-3.5 text-gray-400" />
+                          : <ChevronDown className="w-3.5 h-3.5 text-gray-400" />}
+                      </span>
+                      <div className="min-w-0 flex-1">
+                        <p
+                          className="font-medium text-gray-900"
+                          dir={detectLtr(c.full_name) ? "ltr" : undefined}
+                          style={detectLtr(c.full_name) ? { textAlign: "left" } : undefined}
                         >
-                          <Mail className="w-3 h-3" /> {c.email}
-                        </a>
-                      )}
-                      {c.phone && (
-                        <span className="inline-flex items-center gap-1" dir="ltr">
-                          <Phone className="w-3 h-3" /> {c.phone}
-                        </span>
-                      )}
+                          {c.full_name}
+                        </p>
+                        {(c.role_title || c.organization) && (
+                          <p className="text-sm text-gray-600 mt-0.5">
+                            {[c.role_title, c.organization].filter(Boolean).join(" · ")}
+                          </p>
+                        )}
+                        <div className="flex flex-wrap items-center gap-x-3 gap-y-1 mt-2 text-xs text-gray-500">
+                          {c.email && (
+                            <a
+                              href={`mailto:${c.email}`}
+                              onClick={(e) => e.stopPropagation()}
+                              className="inline-flex items-center gap-1 text-blue-600 hover:text-blue-800"
+                              dir="ltr"
+                            >
+                              <Mail className="w-3 h-3" /> {c.email}
+                            </a>
+                          )}
+                          {c.phone && (
+                            <span className="inline-flex items-center gap-1" dir="ltr">
+                              <Phone className="w-3 h-3" /> {c.phone}
+                            </span>
+                          )}
+                        </div>
+                      </div>
                     </div>
-                    {c.notes && (
-                      <p className="text-xs text-gray-600 mt-2 whitespace-pre-wrap">{c.notes}</p>
-                    )}
-                  </div>
-                  <div className="flex items-center gap-1 flex-shrink-0">
-                    <button
-                      onClick={() => startEdit(c)}
-                      className="p-1.5 text-gray-500 hover:text-blue-600 hover:bg-blue-50 rounded-md"
-                      title="עריכה"
+                    <div
+                      className="flex items-center gap-1 flex-shrink-0"
+                      onClick={(e) => e.stopPropagation()}
                     >
-                      <Edit2 className="w-4 h-4" />
-                    </button>
-                    <button
-                      onClick={() => remove(c.id, c.full_name)}
-                      className="p-1.5 text-gray-500 hover:text-red-600 hover:bg-red-50 rounded-md"
-                      title="מחיקה"
-                    >
-                      <Trash2 className="w-4 h-4" />
-                    </button>
+                      <button
+                        onClick={() => startEdit(c)}
+                        className="p-1.5 text-gray-500 hover:text-blue-600 hover:bg-blue-50 rounded-md"
+                        title="עריכה"
+                      >
+                        <Edit2 className="w-4 h-4" />
+                      </button>
+                      <button
+                        onClick={() => remove(c.id, c.full_name)}
+                        className="p-1.5 text-gray-500 hover:text-red-600 hover:bg-red-50 rounded-md"
+                        title="מחיקה"
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </button>
+                    </div>
                   </div>
                 </div>
+                {expandedSiteContactIds.has(c.id) && (
+                  <div className="border-t border-gray-100 bg-white p-3 space-y-3">
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-x-4 gap-y-2 text-xs">
+                      <ContactField label="שם מלא"><span dir="auto">{c.full_name}</span></ContactField>
+                      <ContactField label="תפקיד"><span dir="auto">{c.role_title || "—"}</span></ContactField>
+                      <ContactField label="ארגון"><span dir="auto">{c.organization || "—"}</span></ContactField>
+                      <ContactField label="טלפון">
+                        {c.phone
+                          ? <a href={`tel:${c.phone}`} className="text-blue-700 hover:underline" dir="ltr">{c.phone}</a>
+                          : <span className="text-gray-400">—</span>}
+                      </ContactField>
+                      <ContactField label="אימייל" wide>
+                        {c.email
+                          ? <a href={`mailto:${c.email}`} className="text-blue-700 hover:underline" dir="ltr">{c.email}</a>
+                          : <span className="text-gray-400">—</span>}
+                      </ContactField>
+                      <ContactField label="תיאור" wide>
+                        {c.notes
+                          ? <p className="text-gray-800 whitespace-pre-wrap leading-relaxed" dir="auto">{c.notes}</p>
+                          : <span className="text-gray-400">—</span>}
+                      </ContactField>
+                    </div>
+                    <ContactHistoryFeed kind="site_contact" contactId={String(c.id)} refreshTick={siteContactHistoryTick} />
+                  </div>
+                )}
               </li>
             ),
           )}
         </ul>
       )}
 
-      {/* Imported (read-only) sub-section */}
-      {importedContacts.length > 0 && (
+      {/* Imported sub-section — editable + history-tracked. Each row is
+          collapsed by default; clicking expands to show every field
+          plus the change history. */}
+      {importedContactsState.length > 0 && (
         <div className={contacts.length > 0 ? "mt-6 pt-4 border-t border-gray-100" : "mt-4"}>
           <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-3">
-            אנשי קשר ציבוריים מהמקורות ({importedContacts.length})
+            אנשי קשר ציבוריים מהמקורות ({importedContactsState.length})
           </h3>
           <ul className="space-y-2">
-            {importedContacts.map((c) => (
-              <li key={c.contact_id} className="border border-gray-100 rounded-lg p-3 bg-gray-50/30">
-                <p className="font-medium text-gray-800 text-sm" dir="ltr" style={{ textAlign: "left" }}>
-                  {c.organization_name}
-                </p>
-                <p className="text-xs text-gray-500">{c.contact_type}</p>
-                <div className="flex flex-wrap items-center gap-x-3 gap-y-1 mt-2 text-xs text-gray-500">
-                  {c.contact_email && (
-                    <a href={`mailto:${c.contact_email}`} className="inline-flex items-center gap-1 text-blue-600 hover:text-blue-800" dir="ltr">
-                      <Mail className="w-3 h-3" /> {c.contact_email}
-                    </a>
-                  )}
-                  {c.contact_phone && (
-                    <span className="inline-flex items-center gap-1" dir="ltr">
-                      <Phone className="w-3 h-3" /> {c.contact_phone}
-                    </span>
-                  )}
-                  {c.contact_url && (
-                    <a
-                      href={c.contact_url}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="inline-flex items-center gap-1 text-blue-600 hover:text-blue-800 truncate max-w-xs"
-                      dir="ltr"
-                    >
-                      {c.contact_url}
-                    </a>
-                  )}
-                </div>
-              </li>
+            {importedContactsState.map((c) => (
+              <ImportedContactRow
+                key={c.contact_id}
+                contact={c}
+                onPatched={(patched) =>
+                  setImportedContactsState((prev) => prev.map((x) => x.contact_id === patched.contact_id ? patched : x))
+                }
+              />
             ))}
           </ul>
         </div>
@@ -422,6 +462,16 @@ function ContactForm({
           שמירה
         </button>
       </div>
+    </div>
+  );
+}
+
+
+function ContactField({ label, children, wide }: { label: string; children: React.ReactNode; wide?: boolean }) {
+  return (
+    <div className={wide ? "md:col-span-2" : ""}>
+      <div className="text-[10px] uppercase tracking-wide text-gray-500 font-semibold mb-0.5">{label}</div>
+      <div className="text-gray-900">{children}</div>
     </div>
   );
 }

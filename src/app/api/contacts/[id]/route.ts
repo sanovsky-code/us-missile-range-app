@@ -19,6 +19,7 @@ export async function PATCH(
       phone: string;
       email: string;
       notes: string;
+      updated_by: string;
     }>;
     const store = getDataStore();
     await store.ensureLoaded();

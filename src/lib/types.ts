@@ -381,6 +381,48 @@ export interface Contact {
   source_id: string;
 }
 
+/** Discriminator for contact_field_history rows. "imported" → the Excel-
+ * loaded `contacts` table (PK contact_id TEXT). "site_contact" → the
+ * user-managed `site_contacts` table (PK id INTEGER, stored as TEXT
+ * here so a single history table covers both). */
+export type ContactHistoryKind = "imported" | "site_contact";
+
+/** One row of contact_field_history. Append-only. */
+export interface ContactFieldHistoryEntry {
+  id: number;
+  contact_kind: ContactHistoryKind;
+  contact_id: string;
+  field_name: string;
+  old_value?: string;
+  new_value?: string;
+  changed_by?: string;
+  changed_at: string;
+}
+
+/** Editable fields on the imported (Excel) contacts table. contact_id,
+ * site_id, source_id are read-only (structural / FK). */
+export const IMPORTED_CONTACT_EDITABLE_FIELDS = [
+  "organization_name",
+  "contact_type",
+  "contact_email",
+  "contact_phone",
+  "contact_url",
+  "notes",
+] as const;
+export type ImportedContactEditableField = (typeof IMPORTED_CONTACT_EDITABLE_FIELDS)[number];
+
+/** Editable fields on user-managed site_contacts. id, site_id are
+ * read-only. */
+export const SITE_CONTACT_EDITABLE_FIELDS = [
+  "full_name",
+  "role_title",
+  "organization",
+  "phone",
+  "email",
+  "notes",
+] as const;
+export type SiteContactEditableField = (typeof SITE_CONTACT_EDITABLE_FIELDS)[number];
+
 export interface ValidationError {
   sheet: string;
   row: number;

@@ -63,6 +63,7 @@ import {
   RadarLifecycleEvent,
   RADAR_LIFECYCLE_EVENT_TYPES,
   FavoriteRadarListItem,
+  ContactFieldHistoryEntry,
 } from "./types";
 import { getDb, getDbPath, transaction } from "./db";
 
@@ -1196,39 +1197,134 @@ class DataStore {
     phone: string;
     email: string;
     notes: string;
+    updated_by: string;
   }>): SiteContact | null {
     const existing = this.getSiteContact(id);
     if (!existing) return null;
-
-    const updates: string[] = [];
-    const params: unknown[] = [];
-    const setStringField = (col: string, val: string | undefined) => {
-      if (val === undefined) return;
-      updates.push(`${col} = ?`);
-      params.push(val.trim() || null);
-    };
-    setStringField("full_name", patch.full_name);
-    setStringField("role_title", patch.role_title);
-    setStringField("organization", patch.organization);
-    setStringField("phone", patch.phone);
-    setStringField("email", patch.email);
-    setStringField("notes", patch.notes);
 
     // Disallow blanking full_name.
     if (patch.full_name !== undefined && !patch.full_name.trim()) {
       throw new Error("full_name cannot be empty");
     }
 
-    if (updates.length === 0) return existing;
-    updates.push("updated_at = CURRENT_TIMESTAMP");
-    params.push(id);
-    getDb().prepare(`UPDATE site_contacts SET ${updates.join(", ")} WHERE id = ?`).run(...params);
-    return this.getSiteContact(id);
+    const fields: Array<"full_name" | "role_title" | "organization" | "phone" | "email" | "notes"> =
+      ["full_name", "role_title", "organization", "phone", "email", "notes"];
+
+    return transaction((db) => {
+      const updates: string[] = [];
+      const params: unknown[] = [];
+      const historyRows: Array<{ field: string; oldV: string | null; newV: string | null }> = [];
+
+      for (const f of fields) {
+        const v = patch[f];
+        if (v === undefined) continue;
+        const newVal = (v ?? "").trim() || null;
+        const oldVal = (existing[f] ?? null) as string | null;
+        if ((oldVal ?? "") === (newVal ?? "")) continue;
+        updates.push(`${f} = ?`);
+        params.push(newVal);
+        historyRows.push({ field: f, oldV: oldVal, newV: newVal });
+      }
+      if (updates.length === 0) return existing;
+      updates.push("updated_at = CURRENT_TIMESTAMP");
+      params.push(id);
+      db.prepare(`UPDATE site_contacts SET ${updates.join(", ")} WHERE id = ?`).run(...params);
+
+      const insHist = db.prepare(`
+        INSERT INTO contact_field_history (contact_kind, contact_id, field_name, old_value, new_value, changed_by)
+        VALUES ('site_contact', ?, ?, ?, ?, ?)
+      `);
+      for (const h of historyRows) {
+        insHist.run(String(id), h.field, h.oldV, h.newV, norm(patch.updated_by));
+      }
+      return this.getSiteContact(id);
+    });
   }
 
   deleteSiteContact(id: number): boolean {
     const result = getDb().prepare("DELETE FROM site_contacts WHERE id = ?").run(id);
     return result.changes > 0;
+  }
+
+
+  // --- Imported (Excel-loaded) contacts: editable + history-tracked ----
+  //
+  // The `contacts` table is normally re-populated from us_missile_range_data.xlsx
+  // via `npm run db:import` (which deletes-and-reinserts). Local edits are
+  // preserved by the wizard's selective-import path but blown away by the
+  // full bulk loader — the history rows survive though, since they live in
+  // a separate table.
+
+  getImportedContact(contactId: string): Contact | null {
+    const row = getDb().prepare("SELECT * FROM contacts WHERE contact_id = ?").get(contactId) as
+      | Record<string, unknown> | undefined;
+    if (!row) return null;
+    return {
+      contact_id: String(row.contact_id ?? ""),
+      site_id: String(row.site_id ?? ""),
+      organization_name: String(row.organization_name ?? ""),
+      contact_type: String(row.contact_type ?? ""),
+      contact_email: toUndef(row.contact_email as string | null) ?? undefined,
+      contact_phone: toUndef(row.contact_phone as string | null) ?? undefined,
+      contact_url: toUndef(row.contact_url as string | null) ?? undefined,
+      notes: toUndef(row.notes as string | null) ?? undefined,
+      source_id: String(row.source_id ?? ""),
+    };
+  }
+
+  updateImportedContact(contactId: string, patch: Partial<{
+    organization_name: string;
+    contact_type: string;
+    contact_email: string;
+    contact_phone: string;
+    contact_url: string;
+    notes: string;
+    updated_by: string;
+  }>): Contact | null {
+    const existing = this.getImportedContact(contactId);
+    if (!existing) return null;
+
+    const fields: Array<"organization_name" | "contact_type" | "contact_email" | "contact_phone" | "contact_url" | "notes"> =
+      ["organization_name", "contact_type", "contact_email", "contact_phone", "contact_url", "notes"];
+
+    return transaction((db) => {
+      const updates: string[] = [];
+      const params: unknown[] = [];
+      const historyRows: Array<{ field: string; oldV: string | null; newV: string | null }> = [];
+
+      for (const f of fields) {
+        const v = patch[f];
+        if (v === undefined) continue;
+        const newVal = (v ?? "").trim() || null;
+        const oldVal = ((existing[f] as string | undefined) ?? null) as string | null;
+        if ((oldVal ?? "") === (newVal ?? "")) continue;
+        updates.push(`${f} = ?`);
+        params.push(newVal);
+        historyRows.push({ field: f, oldV: oldVal, newV: newVal });
+      }
+      if (updates.length === 0) return existing;
+      params.push(contactId);
+      db.prepare(`UPDATE contacts SET ${updates.join(", ")} WHERE contact_id = ?`).run(...params);
+
+      const insHist = db.prepare(`
+        INSERT INTO contact_field_history (contact_kind, contact_id, field_name, old_value, new_value, changed_by)
+        VALUES ('imported', ?, ?, ?, ?, ?)
+      `);
+      for (const h of historyRows) {
+        insHist.run(contactId, h.field, h.oldV, h.newV, norm(patch.updated_by));
+      }
+      return this.getImportedContact(contactId);
+    });
+  }
+
+  /** Per-contact change feed, newest-first. Shared by both contact tables
+   * via the contact_kind discriminator. */
+  listContactHistory(kind: "imported" | "site_contact", contactId: string): ContactFieldHistoryEntry[] {
+    return getDb()
+      .prepare(`SELECT * FROM contact_field_history
+                WHERE contact_kind = ? AND contact_id = ?
+                ORDER BY datetime(changed_at) DESC, id DESC`)
+      .all(kind, contactId) as ContactFieldHistoryEntry[];
   }
 
 

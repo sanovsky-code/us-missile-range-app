@@ -217,6 +217,27 @@ CREATE TABLE IF NOT EXISTS contacts (
 );
 CREATE INDEX IF NOT EXISTS idx_contacts_site ON contacts(site_id);
 
+-- Append-only per-field change log shared by BOTH contact tables.
+-- contact_kind discriminates "imported" (parent table: contacts) vs
+-- "site_contact" (parent table: site_contacts). contact_id is always
+-- stored as TEXT so the two ID shapes (CON-0001 vs 42) can share one
+-- table. ON DELETE CASCADE doesn't apply across the polymorphic FK —
+-- updateImportedContact / updateSiteContact write into this table
+-- directly, and a future delete-of-contact would have to wipe the
+-- history rows explicitly.
+CREATE TABLE IF NOT EXISTS contact_field_history (
+  id             INTEGER PRIMARY KEY AUTOINCREMENT,
+  contact_kind   TEXT NOT NULL,
+  contact_id     TEXT NOT NULL,
+  field_name     TEXT NOT NULL,
+  old_value      TEXT,
+  new_value      TEXT,
+  changed_by     TEXT,
+  changed_at     TEXT DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_contact_field_history_lookup ON contact_field_history(contact_kind, contact_id);
+CREATE INDEX IF NOT EXISTS idx_contact_field_history_changed_at ON contact_field_history(changed_at);
+
 -- Generic table for file attachments. The actual file lives under /files/<type>/<name>;
 -- only the relative path is stored here so the project remains portable.
 CREATE TABLE IF NOT EXISTS files (
