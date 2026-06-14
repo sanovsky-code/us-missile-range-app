@@ -76,7 +76,11 @@ export default function PreviewDiff({ report }: { report: SelectiveImportReport 
       {changed.length > 0 && (
         <section className="bg-white border border-gray-200 rounded-lg p-4">
           <h3 className="text-base font-semibold text-gray-900 mb-3">שינויי שדות ({changed.length})</h3>
-          <div className="space-y-3 max-h-[420px] overflow-auto">
+          {/* Let every change render inline — the page itself scrolls
+              now (see src/app/import/page.tsx). An inner max-h here
+              would force a nested scrollbar that makes it easy to miss
+              entries. */}
+          <div className="space-y-3">
             {changed.map((d, idx) => (
               <article key={`${d.entityType}-${d.entityId}-${idx}`} className="border border-gray-100 rounded-md p-3">
                 <div className="flex items-center gap-2 mb-2">
@@ -126,22 +130,23 @@ export default function PreviewDiff({ report }: { report: SelectiveImportReport 
         <section className="bg-yellow-50 border border-yellow-200 rounded-lg p-4">
           <h3 className="text-base font-semibold text-yellow-900 mb-2">דילוגים ({skipped.length})</h3>
           <ul className="text-sm text-yellow-800 space-y-1">
-            {skipped.slice(0, 12).map((d, i) => (
+            {skipped.map((d, i) => (
               <li key={i}>
                 שורה {d.rowNumber} — <span className="font-mono">{d.entityId || "(ללא מזהה)"}</span>:{" "}
                 {d.errors.filter((e) => e.severity === "error").map((e) => e.message).join("; ") || "ללא שינויים"}
               </li>
             ))}
-            {skipped.length > 12 && <li>…ועוד {skipped.length - 12}.</li>}
           </ul>
         </section>
       )}
 
       {report.issues.filter((i) => i.severity === "error").length > 0 && (
         <section className="bg-red-50 border border-red-200 rounded-lg p-4">
-          <h3 className="text-base font-semibold text-red-900 mb-2">שגיאות ולידציה</h3>
+          <h3 className="text-base font-semibold text-red-900 mb-2">
+            שגיאות ולידציה ({report.issues.filter((i) => i.severity === "error").length})
+          </h3>
           <ul className="text-sm text-red-800 space-y-1">
-            {report.issues.filter((i) => i.severity === "error").slice(0, 20).map((i, idx) => (
+            {report.issues.filter((i) => i.severity === "error").map((i, idx) => (
               <li key={idx}>
                 <span className="font-mono">[{i.sheet} שורה {i.row}]</span> {i.field}: {i.message}
               </li>

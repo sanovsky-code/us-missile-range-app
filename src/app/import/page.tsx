@@ -171,7 +171,11 @@ export default function ImportWizardPage() {
   };
 
   return (
-    <main className="min-h-screen bg-gray-50 p-6 pb-24" dir="rtl">
+    // Root layout's <main> is overflow-hidden, so per-page wrappers must
+    // opt into their own scroll context. Same pattern as /favorites and
+    // /contacts. The sticky bottom action bar then anchors to this
+    // container instead of the viewport.
+    <div className="flex-1 overflow-y-auto bg-gray-50 p-6 pb-24" dir="rtl">
       <div className="max-w-6xl mx-auto">
         <h1 className="text-2xl font-bold text-gray-900 mb-2">ייבוא נתונים</h1>
         <p className="text-sm text-gray-600 mb-6">
@@ -389,7 +393,7 @@ export default function ImportWizardPage() {
           </section>
         )}
       </div>
-    </main>
+    </div>
   );
 }
 
