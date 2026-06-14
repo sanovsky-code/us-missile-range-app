@@ -238,6 +238,23 @@ CREATE TABLE IF NOT EXISTS contact_field_history (
 CREATE INDEX IF NOT EXISTS idx_contact_field_history_lookup ON contact_field_history(contact_kind, contact_id);
 CREATE INDEX IF NOT EXISTS idx_contact_field_history_changed_at ON contact_field_history(changed_at);
 
+-- Append-only per-field change log for site_range_activities (the
+-- Excel-imported "Activities" sheet — distinct from the Salesforce-style
+-- site_timeline_activities). Same shape as opportunity_field_history /
+-- contact_field_history. Created on every PATCH /api/range-activities/:id
+-- diff.
+CREATE TABLE IF NOT EXISTS activity_field_history (
+  id             INTEGER PRIMARY KEY AUTOINCREMENT,
+  activity_id    TEXT NOT NULL,
+  field_name     TEXT NOT NULL,
+  old_value      TEXT,
+  new_value      TEXT,
+  changed_by     TEXT,
+  changed_at     TEXT DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_activity_field_history_lookup ON activity_field_history(activity_id);
+CREATE INDEX IF NOT EXISTS idx_activity_field_history_changed_at ON activity_field_history(changed_at);
+
 -- Generic table for file attachments. The actual file lives under /files/<type>/<name>;
 -- only the relative path is stored here so the project remains portable.
 CREATE TABLE IF NOT EXISTS files (

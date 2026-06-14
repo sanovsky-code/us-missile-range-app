@@ -423,6 +423,41 @@ export const SITE_CONTACT_EDITABLE_FIELDS = [
 ] as const;
 export type SiteContactEditableField = (typeof SITE_CONTACT_EDITABLE_FIELDS)[number];
 
+/** One row of activity_field_history. Append-only. */
+export interface ActivityFieldHistoryEntry {
+  id: number;
+  activity_id: string;
+  field_name: string;
+  old_value?: string;
+  new_value?: string;
+  changed_by?: string;
+  changed_at: string;
+}
+
+/** Editable fields on site_range_activities. activity_id and site_id
+ * are structural / FK so they stay read-only. */
+export const ACTIVITY_EDITABLE_FIELDS = [
+  "activity_category",
+  "activity_description",
+  "missile_or_system_type",
+  "start_year",
+  "end_year",
+  "status",
+  "source_id",
+  "confidence_level",
+] as const;
+export type ActivityEditableField = (typeof ACTIVITY_EDITABLE_FIELDS)[number];
+
+/** Salesforce-style picklist values that the activity edit form uses
+ * for category, status, and confidence_level. Same values the import
+ * template's data-validation dropdowns enforce. */
+export const ACTIVITY_CATEGORIES = [
+  "Missile Test", "Space Launch", "Radar Tracking", "Telemetry",
+  "Missile Defense", "Range Safety", "Aerospace Test", "Other",
+] as const;
+export const ACTIVITY_STATUSES = ["Current", "Historical", "Planned", "Unknown"] as const;
+export const ACTIVITY_CONFIDENCE_LEVELS = ["High", "Medium", "Low"] as const;
+
 export interface ValidationError {
   sheet: string;
   row: number;

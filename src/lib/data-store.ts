@@ -64,6 +64,10 @@ import {
   RADAR_LIFECYCLE_EVENT_TYPES,
   FavoriteRadarListItem,
   ContactFieldHistoryEntry,
+  ActivityFieldHistoryEntry,
+  ACTIVITY_CATEGORIES,
+  ACTIVITY_STATUSES,
+  ACTIVITY_CONFIDENCE_LEVELS,
 } from "./types";
 import { getDb, getDbPath, transaction } from "./db";
 
@@ -713,6 +717,110 @@ class DataStore {
   private getActivitiesBySite(siteId: string): SiteRangeActivity[] {
     const rows = getDb().prepare("SELECT * FROM site_range_activities WHERE site_id = ?").all(siteId) as Record<string, unknown>[];
     return rows.map(rowToRangeActivity);
+  }
+
+  /** Fetch a single Excel-imported range activity by id. Used by the
+   * site profile expand panel + PATCH endpoint. Note: distinct from
+   * getActivityById() above which operates on site_timeline_activities. */
+  getRangeActivity(activityId: string): SiteRangeActivity | null {
+    const row = getDb().prepare("SELECT * FROM site_range_activities WHERE activity_id = ?").get(activityId) as
+      | Record<string, unknown> | undefined;
+    return row ? rowToRangeActivity(row) : null;
+  }
+
+  /** Update an Excel-imported site_range_activity in place. Every diffed
+   * field is logged to activity_field_history with kind, old, new, by,
+   * at. Empty-string inputs normalize to NULL so the history mirrors
+   * the underlying TEXT-with-NULL pattern. */
+  updateRangeActivity(activityId: string, patch: Partial<{
+    activity_category: string;
+    activity_description: string;
+    missile_or_system_type: string | null;
+    start_year: number | null;
+    end_year: number | null;
+    status: string;
+    source_id: string | null;
+    confidence_level: string;
+    updated_by: string;
+  }>): SiteRangeActivity | null {
+    const existing = this.getRangeActivity(activityId);
+    if (!existing) return null;
+
+    if (patch.activity_category !== undefined && !(ACTIVITY_CATEGORIES as readonly string[]).includes(patch.activity_category)) {
+      throw new Error(`Invalid activity_category: ${patch.activity_category}`);
+    }
+    if (patch.status !== undefined && !(ACTIVITY_STATUSES as readonly string[]).includes(patch.status)) {
+      throw new Error(`Invalid status: ${patch.status}`);
+    }
+    if (patch.confidence_level !== undefined && !(ACTIVITY_CONFIDENCE_LEVELS as readonly string[]).includes(patch.confidence_level)) {
+      throw new Error(`Invalid confidence_level: ${patch.confidence_level}`);
+    }
+    if (patch.source_id) {
+      const ok = getDb().prepare("SELECT 1 FROM sources WHERE source_id = ?").get(patch.source_id);
+      if (!ok) throw new Error(`Source "${patch.source_id}" not found`);
+    }
+
+    return transaction((db) => {
+      const updates: string[] = [];
+      const params: unknown[] = [];
+      const historyRows: Array<{ field: string; oldV: unknown; newV: unknown }> = [];
+
+      const setField = (
+        col: "activity_category" | "activity_description" | "missile_or_system_type" |
+             "start_year" | "end_year" | "status" | "source_id" | "confidence_level",
+        rawValue: unknown,
+      ) => {
+        if (rawValue === undefined) return;
+        let newVal: unknown;
+        if (rawValue === null) newVal = null;
+        else if (typeof rawValue === "number") newVal = rawValue;
+        else if (typeof rawValue === "string") newVal = rawValue.trim() || null;
+        else newVal = rawValue;
+        const oldVal = (existing as unknown as Record<string, unknown>)[col] ?? null;
+        // Normalize so "0" !== 0 and "" === null comparisons work.
+        const same = ((oldVal ?? "") as unknown as string | number) === ((newVal ?? "") as unknown as string | number);
+        if (same) return;
+        updates.push(`${col} = ?`);
+        params.push(newVal);
+        historyRows.push({ field: col, oldV: oldVal, newV: newVal });
+      };
+
+      setField("activity_category", patch.activity_category);
+      setField("activity_description", patch.activity_description);
+      setField("missile_or_system_type", patch.missile_or_system_type);
+      setField("start_year", patch.start_year);
+      setField("end_year", patch.end_year);
+      setField("status", patch.status);
+      setField("source_id", patch.source_id);
+      setField("confidence_level", patch.confidence_level);
+
+      if (updates.length === 0) return existing;
+      params.push(activityId);
+      db.prepare(`UPDATE site_range_activities SET ${updates.join(", ")} WHERE activity_id = ?`).run(...params);
+
+      const insHist = db.prepare(`
+        INSERT INTO activity_field_history (activity_id, field_name, old_value, new_value, changed_by)
+        VALUES (?, ?, ?, ?, ?)
+      `);
+      for (const h of historyRows) {
+        insHist.run(
+          activityId, h.field,
+          h.oldV === null || h.oldV === undefined ? null : String(h.oldV),
+          h.newV === null || h.newV === undefined ? null : String(h.newV),
+          norm(patch.updated_by),
+        );
+      }
+      return this.getRangeActivity(activityId);
+    });
+  }
+
+  /** Per-range-activity field-change feed, newest-first. */
+  listRangeActivityHistory(activityId: string): ActivityFieldHistoryEntry[] {
+    return getDb()
+      .prepare(`SELECT * FROM activity_field_history
+                WHERE activity_id = ?
+                ORDER BY datetime(changed_at) DESC, id DESC`)
+      .all(activityId) as ActivityFieldHistoryEntry[];
   }
 
   private getContactsBySite(siteId: string): Contact[] {
