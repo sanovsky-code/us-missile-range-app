@@ -2414,6 +2414,14 @@ function bulkUpsertLifecycleSheet(
   parsed: ParseResult,
   changedBy: string,
   mode: "apply" | "dryRun" = "apply",
+  /** Radar_ids that aren't in the DB yet but WILL be created in the same
+   * import. The dry-run path is called BEFORE the radars are inserted,
+   * so without this hint it would reject every lifecycle row whose
+   * radar lives in the same workbook. The apply path runs INSIDE the
+   * transaction after applyDecisions, so this is only needed for
+   * preview. Keyed radar_id → site_id so we can resolve the parent
+   * site_id when the sheet row leaves it blank. */
+  pendingRadars: Map<string, string> = new Map(),
 ): WholesaleResult {
   const sheet = parsed.sheets["Radar_Lifecycle"];
   const out: WholesaleResult = { inserted: 0, updated: 0, skipped: 0, issues: [] };
@@ -2426,6 +2434,11 @@ function bulkUpsertLifecycleSheet(
   const radarToSite = new Map<string, string>();
   for (const r of txDb.prepare("SELECT radar_id, site_id FROM radars").all() as Array<{ radar_id: string; site_id: string }>) {
     radarToSite.set(r.radar_id, r.site_id);
+  }
+  // Merge in pending creates so the dry-run sees the full universe.
+  for (const [rId, sId] of pendingRadars) {
+    existingRadarIds.add(rId);
+    if (!radarToSite.has(rId)) radarToSite.set(rId, sId);
   }
   const existsStmt = txDb.prepare("SELECT 1 AS v FROM radar_lifecycle_events WHERE event_id = ?");
   const upsertStmt = txDb.prepare(`
@@ -2455,7 +2468,17 @@ function bulkUpsertLifecycleSheet(
     }
     if (!existingRadarIds.has(radarId)) {
       out.skipped++;
-      out.issues.push({ sheet: "Radar_Lifecycle", row: row.rowNumber, field: "radar_id", value: radarId, rule: "fk_violation", message: `radar_id "${radarId}" does not exist in radars table.`, severity: "error" });
+      // Hint: was this radar in the workbook but not selected for
+      // create in the wizard's per-site tree?
+      const inWorkbook = (parsed.sheets["Radars"]?.rows ?? []).some((r) => (r.cells["radar_id"] ?? "").trim() === radarId);
+      const hint = inWorkbook
+        ? " The radar IS in the workbook's Radars sheet — go back to step 1 and tick it for creation, then re-run."
+        : "";
+      out.issues.push({
+        sheet: "Radar_Lifecycle", row: row.rowNumber, field: "radar_id", value: radarId, rule: "fk_violation",
+        message: `radar_id "${radarId}" does not exist in radars table.${hint}`,
+        severity: "error",
+      });
       continue;
     }
     if (!eventType) {
@@ -2518,6 +2541,10 @@ function bulkUpsertSystemsSheet(
   parsed: ParseResult,
   changedBy: string,
   mode: "apply" | "dryRun" = "apply",
+  /** Site_ids that aren't in the DB yet but WILL be created in the
+   * same import. Mirrors pendingRadars in bulkUpsertLifecycleSheet —
+   * only needed for the preview dry-run. */
+  pendingSites: Set<string> = new Set(),
 ): WholesaleResult {
   const sheet = parsed.sheets["Systems"];
   const out: WholesaleResult = { inserted: 0, updated: 0, skipped: 0, issues: [] };
@@ -2526,6 +2553,7 @@ function bulkUpsertSystemsSheet(
   const existingSiteIds = new Set(
     (txDb.prepare("SELECT site_id FROM sites").all() as Array<{ site_id: string }>).map((r) => r.site_id),
   );
+  for (const sId of pendingSites) existingSiteIds.add(sId);
   const existsStmt = txDb.prepare("SELECT 1 AS v FROM systems WHERE system_id = ?");
   const upsertStmt = txDb.prepare(`
     INSERT OR REPLACE INTO systems (
@@ -2555,7 +2583,15 @@ function bulkUpsertSystemsSheet(
     }
     if (!existingSiteIds.has(siteId)) {
       out.skipped++;
-      out.issues.push({ sheet: "Systems", row: row.rowNumber, field: "site_id", value: siteId, rule: "fk_violation", message: `site_id "${siteId}" does not exist in sites table.`, severity: "error" });
+      const inWorkbook = (parsed.sheets["Sites"]?.rows ?? []).some((r) => (r.cells["site_id"] ?? "").trim() === siteId);
+      const hint = inWorkbook
+        ? " The site IS in the workbook's Sites sheet — go back to step 1 and tick it for creation, then re-run."
+        : "";
+      out.issues.push({
+        sheet: "Systems", row: row.rowNumber, field: "site_id", value: siteId, rule: "fk_violation",
+        message: `site_id "${siteId}" does not exist in sites table.${hint}`,
+        severity: "error",
+      });
       continue;
     }
     if (!systemName) {
@@ -2829,15 +2865,38 @@ export async function runMultiTypeSelectiveImport(
 
   // Dry-run validate the wholesale sheets so preview shows accurate
   // would-insert / would-update / would-skip counts BEFORE apply.
+  //
+  // Wholesale sheets (Radar_Lifecycle / Systems) frequently reference
+  // radars and sites defined in the SAME workbook. Without telling the
+  // dry-run about those pending creates, every lifecycle row whose
+  // radar is being introduced by this very import would be marked as
+  // "radar_id does not exist" — even though the apply transaction
+  // would have created the radar BEFORE the wholesale upsert ran.
+  //
+  // We trust selection here: only count radars/sites the operator has
+  // actually ticked for create. A radar that's in the workbook but
+  // wasn't selected will (correctly) fail validation, matching what
+  // the apply transaction would do.
+  const pendingRadars = new Map<string, string>();
+  const pendingSites = new Set<string>();
+  for (const d of buckets.sites) {
+    if (d.action === "Create" && d.entityId) pendingSites.add(d.entityId);
+  }
+  for (const d of buckets.radars) {
+    if (d.action === "Create" && d.entityId) {
+      const siteField = d.fields.find((f) => f.field === "site_id");
+      pendingRadars.set(d.entityId, siteField?.newValue ?? "");
+    }
+  }
   {
-    const lifecyclePreview = bulkUpsertLifecycleSheet(getDb(), opts.parsed, opts.changedBy ?? "import", "dryRun");
+    const lifecyclePreview = bulkUpsertLifecycleSheet(getDb(), opts.parsed, opts.changedBy ?? "import", "dryRun", pendingRadars);
     report.perWholesale.radar_lifecycle.inserted = lifecyclePreview.inserted;
     report.perWholesale.radar_lifecycle.updated  = lifecyclePreview.updated;
     report.perWholesale.radar_lifecycle.skipped  = lifecyclePreview.skipped;
     report.totals.errorCount += lifecyclePreview.issues.filter((i) => i.severity === "error").length;
     if (opts.mode === "preview") report.issues.push(...lifecyclePreview.issues);
 
-    const systemsPreview = bulkUpsertSystemsSheet(getDb(), opts.parsed, opts.changedBy ?? "import", "dryRun");
+    const systemsPreview = bulkUpsertSystemsSheet(getDb(), opts.parsed, opts.changedBy ?? "import", "dryRun", pendingSites);
     report.perWholesale.systems.inserted = systemsPreview.inserted;
     report.perWholesale.systems.updated  = systemsPreview.updated;
     report.perWholesale.systems.skipped  = systemsPreview.skipped;
